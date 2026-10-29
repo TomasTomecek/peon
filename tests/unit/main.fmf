@@ -1,0 +1,11 @@
+summary: Go unit tests, including the race detector
+description: |
+    Runs the whole Go test suite from the source tree on a real Fedora/EL
+    machine. The RPM build does not run tests: build chroots lack tools the
+    tests may use and give no useful logs when they fail.
+test: ./test.sh
+duration: 20m
+require:
+  - golang
+  - gcc
+  - git
