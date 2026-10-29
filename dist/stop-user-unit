@@ -1,0 +1,31 @@
+#!/bin/bash
+# Stop a peon job's inner unit in the calling user's systemd user manager.
+#
+# peon runs a job for a non-root user as a system unit (running as that
+# user) that starts the command in the user's own manager with
+# "systemd-run --user". This script is that system unit's ExecStopPost=, so
+# stopping the system unit (👎, timeout, shutdown) also stops the inner one.
+#
+# Why a script and not ExecStopPost=/usr/bin/systemctl directly: systemd
+# starts ExecStopPost= programs itself. On SELinux systems, /usr/bin/systemctl
+# started by systemd stays in init_t, which may not stop units in a user's
+# manager, and the stop fails with "Access denied". This script, like other
+# programs in /usr/libexec, is labeled bin_t, so it runs in the same domain
+# as the job's ExecStart= (unconfined_service_t on Fedora), which may.
+set -u
+
+unit="${1:-}"
+if [[ ! "$unit" =~ ^peon-job-[0-9A-Z]+\.service$ ]]; then
+    echo "stop-user-unit: refusing to stop '$unit': not a peon job unit" >&2
+    exit 2
+fi
+
+# The usual case: the job already finished and its unit is gone. Stay quiet,
+# because anything printed here ends up in the job's output.
+if state="$(/usr/bin/systemctl --user show --property=ActiveState --value "$unit" 2>/dev/null)"; then
+    case "$state" in
+        inactive|failed) exit 0 ;;
+    esac
+fi
+
+exec /usr/bin/systemctl --user stop "$unit"

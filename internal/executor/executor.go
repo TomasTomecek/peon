@@ -42,6 +42,10 @@ type Executor interface {
 	Stop(ctx context.Context, jobID string) error
 }
 
+// StopUserUnit is the ExecStopPost= helper installed by the RPM
+// (dist/stop-user-unit). See that script for why it is not systemctl.
+const StopUserUnit = "/usr/libexec/peon/stop-user-unit"
+
 // UnitName is the systemd unit a job runs in.
 func UnitName(jobID string) string { return "peon-job-" + jobID + ".service" }
 
@@ -53,6 +57,8 @@ type Systemd struct {
 	// LingerDir is where logind marks lingering users. Default:
 	// /var/lib/systemd/linger.
 	LingerDir string
+	// StopHelper overrides StopUserUnit, for tests.
+	StopHelper string
 	// Grace is how long past the timeout peon waits before stopping the
 	// unit itself, in case RuntimeMaxSec did not fire.
 	Grace time.Duration
@@ -75,7 +81,7 @@ func (x *Systemd) bin(p, def string) string {
 // rootless podman and systemctl --user need. To get there without extra
 // privileges, a system unit running as the user starts the command with
 // "systemd-run --user"; stopping the system unit (cancel, timeout) stops
-// the inner unit through ExecStopPost.
+// the inner unit through its ExecStopPost= helper.
 func (x *Systemd) Args(s Spec, uid string) []string {
 	secs := int64(s.Timeout / time.Second)
 	if secs < 1 {
@@ -108,7 +114,7 @@ func (x *Systemd) Args(s Spec, uid string) []string {
 		runtime,
 		"--setenv=XDG_RUNTIME_DIR=" + rundir,
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=" + rundir + "/bus",
-		"--property=ExecStopPost=-/usr/bin/systemctl --user stop " + unit,
+		"--property=ExecStopPost=-" + x.bin(x.StopHelper, StopUserUnit) + " " + unit,
 		"--collect", "--wait", "--pipe",
 		"--",
 	}
@@ -151,6 +157,11 @@ func (x *Systemd) prepare(s Spec) (string, error) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, s.User)); err != nil {
 		return "", fmt.Errorf("user %q has no lingering systemd user manager (loginctl enable-linger %s)", s.User, s.User)
+	}
+	// Without the helper the job would run but could never be stopped.
+	helper := x.bin(x.StopHelper, StopUserUnit)
+	if fi, err := os.Stat(helper); err != nil || fi.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%s is missing or not executable; reinstall peon", helper)
 	}
 	return uid, nil
 }
