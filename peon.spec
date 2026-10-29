@@ -33,7 +33,10 @@ step in Loki.
 
 %build
 export CGO_ENABLED=0
-export GOFLAGS="-mod=vendor -trimpath"
+# No -trimpath: it strips the build directory from the debug info's source
+# paths, so find-debuginfo collects no sources and the build fails with an
+# empty debugsourcefiles.list.
+export GOFLAGS="-mod=vendor"
 go build -buildmode=pie \
     -ldflags "-B gobuildid -X main.version=%{version}-%{release}" \
     -o %{name} ./cmd/peon
