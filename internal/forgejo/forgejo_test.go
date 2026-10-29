@@ -3,6 +3,7 @@ package forgejo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -93,5 +94,54 @@ func TestIssueIndex(t *testing.T) {
 		if _, err := c.IssueIndex(); err == nil {
 			t.Errorf("IssueIndex(%+v) succeeded", c)
 		}
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	cases := map[string]time.Duration{
+		"":                              0,
+		"120":                           2 * time.Minute,
+		"-5":                            0,
+		"soon":                          0,
+		"Thu, 29 Oct 2026 10:05:00 GMT": 5 * time.Minute,
+		"Thu, 29 Oct 2026 09:00:00 GMT": 0,
+	}
+	for in, want := range cases {
+		if got := parseRetryAfter(in, now); got != want {
+			t.Errorf("parseRetryAfter(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestRetryAfterAndTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/repos/o/r/issues/comments/1":
+			w.Header().Set("Retry-After", "30")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+		case "/api/v1/repos/o/r/issues/comments/2":
+			http.Error(w, "gone", http.StatusNotFound)
+		default:
+			http.Error(w, "boom", http.StatusBadGateway)
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "t", "ua")
+	ctx := context.Background()
+
+	_, err := c.GetComment(ctx, "o/r", 1)
+	var he *HTTPError
+	if !errors.As(err, &he) || he.RetryAfter != 30*time.Second || !Transient(err) {
+		t.Fatalf("429: %v", err)
+	}
+	if _, err := c.GetComment(ctx, "o/r", 2); Transient(err) {
+		t.Fatalf("404 treated as an outage: %v", err)
+	}
+	if _, err := c.GetComment(ctx, "o/r", 3); !Transient(err) {
+		t.Fatalf("502 not treated as an outage: %v", err)
+	}
+	if !Transient(errors.New("dial tcp: connection refused")) || Transient(nil) {
+		t.Fatal("transport errors")
 	}
 }

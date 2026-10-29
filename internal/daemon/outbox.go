@@ -55,6 +55,9 @@ func outboxDelay(attempts int) time.Duration {
 // it; a crash in between can at worst post it twice, never lose it.
 func (d *Daemon) flushOutbox(ctx context.Context) {
 	for len(d.st.Outbox) > 0 {
+		if !d.forgejoAvailable() {
+			return // backing off; the queue waits
+		}
 		o := d.st.Outbox[0]
 		now := d.Now()
 		if now.Before(o.NextAttempt) {
@@ -100,12 +103,13 @@ func (d *Daemon) outboxEvent(ctx context.Context, o *state.Outgoing, name string
 	}, false)
 }
 
-// permanent reports whether Forgejo refused the comment in a way retrying
-// cannot fix: a 4xx other than 408 (timeout) and 429 (rate limited).
+// permanent reports whether Forgejo refused this one comment in a way
+// retrying cannot fix: a 4xx that is not an outage. 401, 408 and 429 mean
+// Forgejo or the token is unavailable, so those comments wait instead.
 func permanent(err error) bool {
 	var he *forgejo.HTTPError
 	if !errors.As(err, &he) {
 		return false
 	}
-	return he.Status >= 400 && he.Status < 500 && he.Status != 408 && he.Status != 429
+	return he.Status >= 400 && he.Status < 500 && !forgejo.Transient(err)
 }

@@ -54,9 +54,12 @@ type Daemon struct {
 	Now  func() time.Time
 	Rand io.Reader
 
-	mu      sync.Mutex // guards st and running
+	mu      sync.Mutex // guards st, running and the Forgejo backoff state
 	running *runningJob
 	wg      sync.WaitGroup
+
+	fjFailures int       // consecutive transient Forgejo failures
+	fjNext     time.Time // no Forgejo calls before this
 }
 
 type runningJob struct {
@@ -65,11 +68,13 @@ type runningJob struct {
 }
 
 func New(cfg *config.Config, fj Forgejo, audit loki.Pusher, spool *loki.Spool, ex executor.Executor, st *state.Store, log *slog.Logger) *Daemon {
-	return &Daemon{
-		cfg: cfg, fj: fj, audit: audit, spool: spool, exec: ex, st: st, log: log,
+	d := &Daemon{
+		cfg: cfg, audit: audit, spool: spool, exec: ex, st: st, log: log,
 		Now:  func() time.Time { return time.Now().UTC() },
 		Rand: crand.Reader,
 	}
+	d.fj = &tracked{inner: fj, d: d}
+	return d
 }
 
 // Run recovers from a previous crash, then polls until ctx is cancelled.
@@ -99,14 +104,25 @@ func (d *Daemon) Tick(ctx context.Context) {
 	defer d.mu.Unlock()
 
 	d.flushSpool(ctx)
-	d.flushOutbox(ctx)
+	// While Forgejo is failing, skip it but keep doing local work at the
+	// normal cadence: flushing the audit spool and starting approved jobs.
+	if d.forgejoAvailable() {
+		d.flushOutbox(ctx)
+	}
 	for _, repo := range d.cfg.Forgejo.Repos {
-		if err := d.scan(ctx, repo); err != nil {
+		if !d.forgejoAvailable() {
+			break
+		}
+		if err := d.scan(ctx, repo); err != nil && !forgejo.Transient(err) {
 			d.log.Warn("scanning comments failed", "repo", repo, "err", err)
 		}
 	}
-	d.reviewProposed(ctx)
-	d.watchRunning(ctx)
+	if d.forgejoAvailable() {
+		d.reviewProposed(ctx)
+	}
+	if d.forgejoAvailable() {
+		d.watchRunning(ctx)
+	}
 	d.startNext(ctx)
 	d.st.Prune(d.Now(), keepHistory)
 	d.save()
@@ -284,12 +300,17 @@ func (d *Daemon) handleRun(ctx context.Context, repo string, c forgejo.Comment, 
 // reviewProposed applies the approval rules to every proposed job.
 func (d *Daemon) reviewProposed(ctx context.Context) {
 	for _, j := range d.jobsIn(job.Proposed) {
+		if !d.forgejoAvailable() {
+			return
+		}
 		var card *forgejo.Comment
 		c, err := d.fj.GetComment(ctx, j.Record.Repo, j.CardCommentID)
 		switch {
 		case forgejo.IsNotFound(err):
 		case err != nil:
-			d.log.Warn("reading job card failed", "job", j.Record.JobID, "err", err)
+			if !forgejo.Transient(err) {
+				d.log.Warn("reading job card failed", "job", j.Record.JobID, "err", err)
+			}
 			continue
 		default:
 			card = &c
@@ -298,7 +319,9 @@ func (d *Daemon) reviewProposed(ctx context.Context) {
 		if card != nil {
 			reactions, err = d.fj.ListCommentReactions(ctx, j.Record.Repo, j.CardCommentID)
 			if err != nil {
-				d.log.Warn("reading reactions failed", "job", j.Record.JobID, "err", err)
+				if !forgejo.Transient(err) {
+					d.log.Warn("reading reactions failed", "job", j.Record.JobID, "err", err)
+				}
 				continue
 			}
 		}

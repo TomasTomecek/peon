@@ -260,7 +260,7 @@ Posted by the bot when the job finishes:
 - Status, exit code, duration.
 - Last `output_tail_lines` lines (default 50, max 4 KB) of combined output, unless `--private`.
 - With `--private`: only status and exit code, plus a note that the output is in Loki only.
-- Result and status comments (rejected, expired, voided, interrupted) go through a persistent **outbox** in the state file, since agents wait for them. They are posted in order; a failure is retried after 10 s, doubling up to 10 min, for up to 24 h. A permanent refusal (a 4xx other than 408/429, such as a locked or deleted issue) is dropped at once so it can't block later comments. Delayed and dropped comments are recorded in Loki (`comment_posted`, `comment_dropped`). A crash right after Forgejo accepts a comment can post it twice, but it is never lost silently.
+- Result and status comments (rejected, expired, voided, interrupted) go through a persistent **outbox** in the state file, since agents wait for them. They are posted in order; a failure is retried after 10 s, doubling up to 10 min, for up to 24 h. A permanent refusal (a 4xx other than 401/408/429, such as a locked or deleted issue) is dropped at once so it can't block later comments. A 401 (rejected token) is treated as an outage: comments wait until the token works again. The outbox respects the Forgejo backoff (§9). Delayed and dropped comments are recorded in Loki (`comment_posted`, `comment_dropped`). A crash right after Forgejo accepts a comment can post it twice, but it is never lost silently.
 - A Grafana Explore link and the LogQL query `{job="peon", job_id="<id>"}`. With `grafana.loki_datasource_uid` set, the link opens the job's logs directly.
 
 ---
@@ -270,6 +270,7 @@ Posted by the bot when the job finishes:
 - Poll new comments on watched repos with `GET /repos/{owner}/{repo}/issues/comments?since=<cursor>`.
 - Poll reactions on open jobs with `GET /repos/{owner}/{repo}/issues/comments/{id}/reactions`.
 - Default interval: 10 s, with jitter.
+- **Backoff:** while Forgejo is failing (network errors, 5xx, 408, 429, 401), peon stops calling it: after `poll_interval`, then doubling, capped at 5 min, with ±10 % jitter, and longer if the server sends `Retry-After` (capped at 30 min). The first failing call in a poll ends Forgejo work for that poll. Local work continues at the normal cadence: flushing the audit spool and starting already-approved jobs. The fail-closed Loki retries are unaffected. A 404 or another 4xx concerns one request (for example, a deleted card) and does not trigger backoff. One warning is logged when backoff starts, and one info line when Forgejo recovers. Expiry is checked against the clock, so a job whose expiry passes during an outage expires as soon as polling resumes.
 - The cursor is persisted in local state and only ever holds Forgejo's own timestamps, so clock differences between peon and Forgejo cannot make it skip comments. On the very first start for a repo, peon reads the last 30 days and marks existing `/run` comments as handled: old requests are never acted on.
 - Each `/run` comment for this host is handled once, by comment ID: it becomes a job or gets one error reply. Editing it later does nothing.
 - Daemons ignore `/run` comments for other hosts entirely, including malformed ones, so only the named host ever replies.

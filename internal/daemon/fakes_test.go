@@ -48,6 +48,8 @@ type fakeForgejo struct {
 	comments  map[int64]*forgejo.Comment
 	reactions map[int64][]forgejo.Reaction
 	postErr   error
+	readErr   error // returned by every read while set
+	calls     int   // Forgejo API calls made
 	// skew is how far Forgejo's clock is behind peon's.
 	skew time.Duration
 }
@@ -104,9 +106,17 @@ func (f *fakeForgejo) botComments() []*forgejo.Comment {
 	return out
 }
 
+func (f *fakeForgejo) setReadErr(err error) { f.mu.Lock(); f.readErr = err; f.mu.Unlock() }
+
+func (f *fakeForgejo) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls }
+
 func (f *fakeForgejo) ListRepoComments(_ context.Context, r string, since time.Time) ([]forgejo.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	var out []forgejo.Comment
 	for _, c := range f.comments {
 		if r == repo && !c.UpdatedAt.Before(since) {
@@ -119,6 +129,10 @@ func (f *fakeForgejo) ListRepoComments(_ context.Context, r string, since time.T
 func (f *fakeForgejo) GetComment(_ context.Context, _ string, id int64) (forgejo.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.readErr != nil {
+		return forgejo.Comment{}, f.readErr
+	}
 	c, ok := f.comments[id]
 	if !ok {
 		return forgejo.Comment{}, &forgejo.HTTPError{Status: http.StatusNotFound}
@@ -129,6 +143,10 @@ func (f *fakeForgejo) GetComment(_ context.Context, _ string, id int64) (forgejo
 func (f *fakeForgejo) ListCommentReactions(_ context.Context, _ string, id int64) ([]forgejo.Reaction, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	return append([]forgejo.Reaction(nil), f.reactions[id]...), nil
 }
 

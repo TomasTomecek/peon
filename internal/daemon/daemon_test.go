@@ -588,6 +588,9 @@ func TestOutboxKeepsOrderAndGivesUpAfterADay(t *testing.T) {
 	h.fj.setPostErr(errForgejoDown)
 	h.fj.react(cardA, approverID, "-1")
 	h.tick()
+	// A failed post also starts the Forgejo backoff, which would pause the
+	// review of card B. Clear it: this test is about the queue's order.
+	h.d.fjNext = time.Time{}
 	h.clock.Add(time.Second)
 	h.fj.react(cardB, approverID, "-1")
 	h.tick()
@@ -623,5 +626,128 @@ func TestOutboxDropsPermanentErrorsAndMovesOn(t *testing.T) {
 	h.tick()
 	if len(h.resultComments()) != 1 {
 		t.Fatalf("later comment blocked: %d", len(h.resultComments()))
+	}
+}
+
+var errUnreachable = errors.New("dial tcp 10.0.0.5:443: connect: connection refused")
+
+func TestForgejoBackoff(t *testing.T) {
+	h := newHarness(t)
+	h.fj.setReadErr(errUnreachable)
+
+	h.tick() // fails: backing off ~10s
+	if h.d.fjFailures != 1 {
+		t.Fatalf("failures %d", h.d.fjFailures)
+	}
+	calls := h.fj.callCount()
+	h.clock.Add(5 * time.Second)
+	h.tick()
+	if h.fj.callCount() != calls {
+		t.Fatal("called Forgejo during backoff")
+	}
+
+	// Each failure doubles the delay: 10s, 20s, 40s, ... capped at 5 min.
+	var gaps []time.Duration
+	for i := 0; i < 8; i++ {
+		gap := h.d.fjNext.Sub(h.clock.Now())
+		gaps = append(gaps, gap)
+		h.clock.Add(gap)
+		h.tick()
+	}
+	if gaps[1] < 15*time.Second || gaps[2] < 30*time.Second || gaps[7] > backoffMax+backoffMax/10 || gaps[7] < backoffMax-backoffMax/10 {
+		t.Fatalf("gaps %v", gaps)
+	}
+
+	// Recovery resets the backoff and peon catches up.
+	h.fj.setReadErr(nil)
+	h.clock.Add(h.d.fjNext.Sub(h.clock.Now()))
+	h.fj.add(agentID, runRestart)
+	h.tick()
+	if h.d.fjFailures != 0 || !h.d.fjNext.IsZero() || len(h.st.Jobs) != 1 {
+		t.Fatalf("not recovered: failures %d, jobs %d", h.d.fjFailures, len(h.st.Jobs))
+	}
+}
+
+func TestForgejoRetryAfterHonoured(t *testing.T) {
+	h := newHarness(t)
+	h.fj.setReadErr(&forgejo.HTTPError{Status: http.StatusTooManyRequests, RetryAfter: 2 * time.Minute})
+	h.tick()
+	calls := h.fj.callCount()
+	h.clock.Add(time.Minute)
+	h.tick()
+	if h.fj.callCount() != calls {
+		t.Fatal("ignored Retry-After")
+	}
+	h.clock.Add(time.Minute + time.Second)
+	h.tick()
+	if h.fj.callCount() == calls {
+		t.Fatal("did not retry after Retry-After")
+	}
+}
+
+func TestOneFailureSkipsTheRestOfTheTick(t *testing.T) {
+	h := newHarness(t)
+	h.propose("/run db1\n```\necho a\n```")
+	h.propose("/run db1\n```\necho b\n```")
+	h.fj.setReadErr(errUnreachable)
+	calls := h.fj.callCount()
+	h.tick()
+	if got := h.fj.callCount() - calls; got != 1 {
+		t.Fatalf("%d Forgejo calls in a failing tick, want 1", got)
+	}
+}
+
+func TestNotFoundIsNotAnOutage(t *testing.T) {
+	h := newHarness(t)
+	card, id := h.propose(runRestart)
+	h.fj.remove(card)
+	h.tick()
+	if h.st.Jobs[id].State != job.Tampered || h.d.fjFailures != 0 {
+		t.Fatalf("state %s, failures %d", h.st.Jobs[id].State, h.d.fjFailures)
+	}
+}
+
+func TestApprovedJobsStartWhileForgejoIsDown(t *testing.T) {
+	h := newHarness(t)
+	cardA, idA := h.propose("/run db1\n```\necho a\n```")
+	cardB, idB := h.propose("/run db1\n```\necho b\n```")
+	h.exec.release = make(chan struct{})
+	h.exec.started = make(chan string, 2)
+	h.fj.react(cardA, approverID, "+1")
+	h.fj.react(cardB, approverID, "+1")
+	h.tick() // both approved, A starts
+	<-h.exec.started
+	h.fj.setReadErr(errUnreachable)
+	h.tick() // Forgejo fails: backing off
+	close(h.exec.release)
+	h.d.Wait()
+	h.clock.Add(time.Second) // still inside the backoff window
+	h.tick()
+	if got := <-h.exec.started; got != idB {
+		t.Fatalf("started %s", got)
+	}
+	h.d.Wait()
+	if h.st.Jobs[idA].State != job.Succeeded || h.st.Jobs[idB].State != job.Succeeded {
+		t.Fatalf("states %s %s", h.st.Jobs[idA].State, h.st.Jobs[idB].State)
+	}
+}
+
+func TestRejectedTokenKeepsCommentsQueued(t *testing.T) {
+	h := newHarness(t)
+	card, id := h.propose(runRestart)
+	h.fj.setPostErr(&forgejo.HTTPError{Status: http.StatusUnauthorized, Body: "token expired"})
+	h.fj.react(card, approverID, "-1")
+	h.tick()
+	if len(h.st.Outbox) != 1 || strings.Contains(strings.Join(h.loki.events(id), ","), "comment_dropped") {
+		t.Fatalf("a rejected token dropped the comment: outbox %d", len(h.st.Outbox))
+	}
+	if h.d.fjFailures == 0 {
+		t.Fatal("401 did not trigger backoff")
+	}
+	h.fj.setPostErr(nil) // token fixed
+	h.clock.Add(time.Minute)
+	h.tick()
+	if len(h.st.Outbox) != 0 || len(h.resultComments()) != 1 {
+		t.Fatalf("outbox %d, comments %d", len(h.st.Outbox), len(h.resultComments()))
 	}
 }

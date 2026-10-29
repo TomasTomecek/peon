@@ -61,6 +61,8 @@ type HTTPError struct {
 	Method, URL string
 	Status      int
 	Body        string
+	// RetryAfter is the server's Retry-After, or zero if it sent none.
+	RetryAfter time.Duration
 }
 
 func (e *HTTPError) Error() string {
@@ -134,7 +136,8 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, in, out
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return &HTTPError{Method: method, URL: u.Redacted(), Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
+		return &HTTPError{Method: method, URL: u.Redacted(), Status: resp.StatusCode, Body: strings.TrimSpace(string(b)),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if out == nil {
 		return nil
@@ -187,4 +190,41 @@ func (c *Client) CreateComment(ctx context.Context, repo string, issue int64, bo
 	err := c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, name, issue), nil,
 		map[string]string{"body": body}, &out)
 	return out, err
+}
+
+// parseRetryAfter reads a Retry-After header: seconds, or an HTTP date.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
+}
+
+// Transient reports whether err looks like Forgejo being unavailable as a
+// whole (network error, 5xx, timeout, rate limit, rejected token) rather
+// than a problem with one request, such as a 404 for a deleted comment.
+func Transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		return true // transport errors: connection refused, DNS, timeouts
+	}
+	switch {
+	case he.Status >= 500, he.Status == http.StatusRequestTimeout,
+		he.Status == http.StatusTooManyRequests, he.Status == http.StatusUnauthorized:
+		return true
+	}
+	return false
 }
