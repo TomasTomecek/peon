@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 func TestArgsPassCommandAsOneArgument(t *testing.T) {
 	x := &Systemd{}
 	cmd := `echo "$HOME"; rm -rf "/tmp/x y" && false`
-	args := x.Args(Spec{JobID: "01JBQ3Y8Z4K7M2N5P6R8S9T0VW", Command: cmd, Timeout: 90 * time.Second})
+	args := x.Args(Spec{JobID: "01JBQ3Y8Z4K7M2N5P6R8S9T0VW", Command: cmd, Timeout: 90 * time.Second}, "0")
 	want := []string{"--quiet", "--unit=peon-job-01JBQ3Y8Z4K7M2N5P6R8S9T0VW.service",
 		"--description=peon job 01JBQ3Y8Z4K7M2N5P6R8S9T0VW", "--uid=root", "--working-directory=/",
 		"--service-type=exec", "--property=RuntimeMaxSec=90", "--collect", "--wait", "--pipe", "--",
@@ -97,5 +98,53 @@ func TestMissingBinary(t *testing.T) {
 	res := x.Run(context.Background(), Spec{JobID: "D", Command: "true", Timeout: time.Second}, func(string) {}, func(string) {})
 	if res.Err == nil || res.ExitCode != -1 {
 		t.Fatalf("result %+v", res)
+	}
+}
+
+func TestArgsForUserRunInTheirUserManager(t *testing.T) {
+	x := &Systemd{}
+	args := x.Args(Spec{JobID: "J", Command: "podman ps", Timeout: time.Minute, User: "deploy"}, "1001")
+	want := []string{"--quiet", "--unit=peon-job-J.service", "--description=peon job J (as deploy)",
+		"--uid=deploy", "--property=WorkingDirectory=~", "--service-type=exec", "--property=RuntimeMaxSec=60",
+		"--setenv=XDG_RUNTIME_DIR=/run/user/1001",
+		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus",
+		"--property=ExecStopPost=-/usr/bin/systemctl --user stop peon-job-J.service",
+		"--collect", "--wait", "--pipe", "--",
+		"/usr/bin/systemd-run", "--user", "--quiet", "--unit=peon-job-J.service", "--description=peon job J",
+		"--service-type=exec", "--property=RuntimeMaxSec=60", "--collect", "--wait", "--pipe", "--",
+		"/bin/bash", "--noprofile", "--norc", "-c", "podman ps"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args =\n%q\nwant\n%q", args, want)
+	}
+	if got := x.Args(Spec{JobID: "J", Command: "id", Timeout: time.Minute, User: "root"}, "0"); got[3] != "--uid=root" || got[len(got)-1] != "id" {
+		t.Fatalf("explicit root args %q", got)
+	}
+}
+
+func TestUserJobNeedsLingering(t *testing.T) {
+	run, ctl, _ := fakeTools(t)
+	linger := t.TempDir()
+	x := &Systemd{SystemdRun: run, Systemctl: ctl, LingerDir: linger,
+		LookupUID: func(name string) (string, error) {
+			if name == "ghost" {
+				return "", errors.New("unknown user")
+			}
+			return "1001", nil
+		}}
+	res := x.Run(context.Background(), Spec{JobID: "U", Command: "true", Timeout: time.Second, User: "deploy"}, func(string) {}, func(string) {})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "loginctl enable-linger deploy") {
+		t.Fatalf("result %+v", res)
+	}
+	res = x.Run(context.Background(), Spec{JobID: "U", Command: "true", Timeout: time.Second, User: "ghost"}, func(string) {}, func(string) {})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "unknown user") {
+		t.Fatalf("result %+v", res)
+	}
+	os.WriteFile(filepath.Join(linger, "deploy"), nil, 0o644)
+	// The fake systemd-run runs whatever follows the first "--": here the
+	// inner systemd-run, which the fake PATH does not have. Seeing it be
+	// invoked is enough to know the checks passed.
+	res = x.Run(context.Background(), Spec{JobID: "U", Command: "true", Timeout: time.Second, User: "deploy"}, func(string) {}, func(string) {})
+	if res.Err != nil {
+		t.Fatalf("checks did not pass: %+v", res)
 	}
 }

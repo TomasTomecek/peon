@@ -64,7 +64,7 @@ The operator must be able to approve these commands from a phone, without being 
 An issue comment by a requester:
 
 ````
-/run db1 [--private] [--timeout=10m]
+/run db1 [--user=postgres] [--private] [--timeout=10m]
 ```sh
 systemctl restart postgresql
 ```
@@ -75,6 +75,7 @@ Rules:
 - The first line must start with `/run <host>`. `<host>` must equal the daemon's configured `host` exactly. Every other daemon ignores the comment.
 - Exactly one fenced code block follows. The language tag is optional (`sh`/`bash` or none).
 - Flags:
+  - `--user=<name>`: run as this user instead of `jobs.default_user` (§7.4).
   - `--private`: no output is posted to the issue (§8.2).
   - `--timeout=<duration>`: default `10m`, capped by config `max_timeout`.
 - Anything else is a parse error. The bot replies with the error and creates no job.
@@ -96,6 +97,7 @@ When a valid `/run` is seen, the daemon creates a job in local state:
   "source_comment_id": 1234,
   "requester_id": 7,
   "requester": "agent-ops",
+  "user": "root",
   "command": "systemctl restart postgresql",
   "flags": { "private": false, "timeout": "10m0s" },
   "created_at": "2026-10-29T10:00:00Z",
@@ -113,7 +115,8 @@ The bot posts a comment on the issue:
 🪓 peon job `01JB…` on **db1**
 
 Requested by @agent-ops (from comment #1234)
-Expires 10:30 UTC · timeout 10m · output: posted
+Runs as root · timeout 10m · output: posted
+Expires 10:30 UTC
 
 ```sh
 systemctl restart postgresql
@@ -212,6 +215,32 @@ All terminal states are final. A job ID can never return to `proposed`.
 
 ---
 
+### 7.4 Running as other users
+
+Jobs run as `jobs.default_user` (default `root`), or as the user named with `--user=<name>`, which must be listed in `jobs.allowed_users` (default `[root]`). The user is part of the job record, so it is covered by the hash, and it is shown prominently on the card.
+
+Non-root jobs run **inside that user's systemd user manager**, so they get the user's real session: `XDG_RUNTIME_DIR`, the user bus, cgroup delegation and their home as the working directory. Rootless podman (with the systemd cgroup manager) and `systemctl --user` work as if the user had logged in. To get there without extra privileges, a system unit running as the user starts the command with `systemd-run --user`:
+
+```
+systemd-run --quiet --unit=peon-job-<id>.service --uid=<user> \
+  --property=WorkingDirectory=~ --service-type=exec --property=RuntimeMaxSec=<timeout> \
+  --setenv=XDG_RUNTIME_DIR=/run/user/<uid> \
+  --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus \
+  --property="ExecStopPost=-/usr/bin/systemctl --user stop peon-job-<id>.service" \
+  --collect --wait --pipe -- \
+  /usr/bin/systemd-run --user --quiet --unit=peon-job-<id>.service --service-type=exec \
+  --property=RuntimeMaxSec=<timeout> --collect --wait --pipe -- \
+  /bin/bash --noprofile --norc -c "<command>"
+```
+
+Stopping the outer system unit (👎, timeout, shutdown) stops the inner user unit through `ExecStopPost`. Exit codes pass through both layers.
+
+Requirements and checks:
+
+- The user's manager must run with nobody logged in: **lingering** (`loginctl enable-linger <user>`). `check-config` and startup refuse a non-root allowed user without it, and so does each job start. peon never enables lingering itself.
+- Users must exist. peon resolves them from `/etc/passwd` only (the binary is static, without NSS), so users from LDAP/SSSD are not supported yet.
+- This is a convenience, not a security boundary: a requester can still pick `root` if it is allowed. The operator's review is the control.
+
 ## 8. Audit and reporting
 
 ### 8.1 Loki
@@ -264,6 +293,10 @@ forgejo:
   bot_token_file: /etc/peon/forgejo.token   # root 0600; same token on every host
   approver_id: 1
   requester_ids: [7, 8, 9]
+
+jobs:
+  default_user: root
+  allowed_users: [root, deploy]   # non-root users need lingering (§7.4)
 
 limits:
   job_ttl: 30m

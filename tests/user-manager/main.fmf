@@ -1,0 +1,11 @@
+summary: Jobs for non-root users run in their systemd user manager
+description: |
+    Exercises the exact systemd-run invocation the executor builds for a
+    non-root job (internal/executor Systemd.Args) on a real systemd:
+    the job runs as the user, systemctl --user and rootless podman work,
+    exit codes come through, and stopping the outer unit stops the inner.
+test: ./test.sh
+duration: 10m
+require:
+  - systemd
+  - podman

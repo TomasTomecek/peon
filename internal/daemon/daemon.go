@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -225,6 +226,13 @@ func (d *Daemon) handleRun(ctx context.Context, repo string, c forgejo.Comment, 
 	if perr != nil {
 		return reply(perr)
 	}
+	runAs := req.User
+	if runAs == "" {
+		runAs = d.cfg.Jobs.DefaultUser
+	}
+	if !d.cfg.UserAllowed(runAs) {
+		return reply(fmt.Errorf("jobs on %s may not run as %q (allowed: %s)", d.cfg.Host, runAs, strings.Join(d.cfg.Jobs.AllowedUsers, ", ")))
+	}
 	timeout := req.Timeout
 	if timeout == 0 {
 		timeout = d.cfg.Limits.DefaultTimeout.Duration
@@ -246,7 +254,7 @@ func (d *Daemon) handleRun(ctx context.Context, repo string, c forgejo.Comment, 
 		Record: job.Record{
 			JobID: id, Host: d.cfg.Host, Repo: repo, Issue: issue,
 			SourceCommentID: c.ID, RequesterID: c.User.ID, Requester: c.User.Login,
-			Command: req.Command, Private: req.Private, Timeout: timeout,
+			User: runAs, Command: req.Command, Private: req.Private, Timeout: timeout,
 			CreatedAt: now, ExpiresAt: now.Add(d.cfg.Limits.JobTTL.Duration),
 		},
 		Warnings: warnings,

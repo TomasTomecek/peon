@@ -20,6 +20,10 @@ func TestParseValid(t *testing.T) {
 			"/run web-2 --private --timeout=5m\n\n```\nuptime\ndf -h\n```  \n\n",
 			Request{Host: "web-2", Private: true, Timeout: 5 * time.Minute, Command: "uptime\ndf -h"},
 		},
+		"user": {
+			"/run db1 --user=postgres\n```\npodman ps\n```",
+			Request{Host: "db1", User: "postgres", Command: "podman ps"},
+		},
 		"crlf from web ui": {
 			"/run db1\r\n```bash\r\necho hi\r\n```\r\n",
 			Request{Host: "db1", Command: "echo hi"},
@@ -58,6 +62,10 @@ func TestParseErrors(t *testing.T) {
 		"bad timeout":      {"/run db1 --timeout=soon\n```\nx\n```", "db1", "invalid --timeout"},
 		"zero timeout":     {"/run db1 --timeout=0s\n```\nx\n```", "db1", "invalid --timeout"},
 		"dup private":      {"/run db1 --private --private\n```\nx\n```", "db1", "twice"},
+		"dup user":         {"/run db1 --user=a --user=b\n```\nx\n```", "db1", "twice"},
+		"bad user":         {"/run db1 --user=Root\n```\nx\n```", "db1", "not a valid user name"},
+		"empty user":       {"/run db1 --user=\n```\nx\n```", "db1", "not a valid user name"},
+		"user injection":   {"/run db1 --user=a;id\n```\nx\n```", "db1", "not a valid user name"},
 		"no block":         {"/run db1", "db1", "missing command"},
 		"prose not fence":  {"/run db1\nplease restart", "db1", "expected a fenced code block"},
 		"wrong lang":       {"/run db1\n```python\nx\n```", "db1", "unsupported code block language"},
