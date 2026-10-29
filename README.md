@@ -22,7 +22,9 @@ hash. You react 👍 on that card from your phone; peon runs the command as
 root in a transient systemd unit, ships the output to Loki, and posts the
 result with a Grafana link. 👎 rejects, or kills a running job.
 
-The full design and threat model are in [SPEC.md](SPEC.md).
+Documentation: [setup](docs/setup.md), [using peon](docs/using.md) and
+[operations](docs/operations.md). The full design and threat model are in
+[SPEC.md](SPEC.md).
 
 ## Status
 
@@ -41,14 +43,9 @@ dnf copr enable <owner>/peon    # Fedora and EPEL 10
 dnf install peon
 ```
 
-Then:
-
-1. Once, for all hosts: create a `peon` bot account in Forgejo and a token
-   with issue read/write on the watched repos.
-2. Write the token to `/etc/peon/forgejo.token` and the Loki push password
-   to `/etc/peon/loki.password`, both `root:root` mode `0600`.
-3. Fill in `/etc/peon/config.yaml` and run `peon check-config`.
-4. `systemctl enable --now peon`
+Then follow [docs/setup.md](docs/setup.md): create the Forgejo bot
+account, write the secrets, fill in `/etc/peon/config.yaml`, run
+`peon check-config` and `systemctl enable --now peon`.
 
 ## Development
 
