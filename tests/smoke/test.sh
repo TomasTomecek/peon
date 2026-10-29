@@ -7,7 +7,7 @@ peon version
 # User and permissions from the package.
 getent passwd peon
 test "$(stat -c '%U:%G %a' /etc/peon)" = "root:peon 750"
-test "$(stat -c '%U:%G %a' /etc/peon/config.toml)" = "root:peon 640"
+test "$(stat -c '%U:%G %a' /etc/peon/config.yaml)" = "root:peon 640"
 test "$(stat -c '%U:%G %a' /var/lib/peon)" = "peon:peon 750"
 test -f /usr/share/polkit-1/rules.d/50-peon.rules
 
@@ -24,18 +24,18 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 ( umask 077; echo token > "$tmp/forgejo.token"; echo password > "$tmp/loki.password" )
-sed -e 's/^host = .*/host = "smoke"/' \
-    -e 's/^bot_user_id = .*/bot_user_id = 31/' \
-    -e 's/^approver_id = .*/approver_id = 1/' \
-    -e 's/^requester_ids = .*/requester_ids = [7]/' \
+sed -e 's/^host: .*/host: smoke/' \
+    -e 's/^  bot_user_id: .*/  bot_user_id: 31/' \
+    -e 's/^  approver_id: .*/  approver_id: 1/' \
+    -e 's/^  requester_ids: .*/  requester_ids: [7]/' \
     -e "s|/etc/peon/forgejo.token|$tmp/forgejo.token|" \
     -e "s|/etc/peon/loki.password|$tmp/loki.password|" \
-    /etc/peon/config.toml > "$tmp/config.toml"
-peon --config "$tmp/config.toml" check-config
+    /etc/peon/config.yaml > "$tmp/config.yaml"
+peon --config "$tmp/config.yaml" check-config
 
 # Secret files that others can read are refused.
 chmod 0644 "$tmp/forgejo.token"
-if peon --config "$tmp/config.toml" check-config; then
+if peon --config "$tmp/config.yaml" check-config; then
     echo "world-readable token unexpectedly accepted" >&2
     exit 1
 fi

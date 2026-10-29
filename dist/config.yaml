@@ -1,0 +1,34 @@
+# peon configuration. See SPEC.md §10.
+# This file is root:peon 0640. Secret files must be peon-owned and 0600.
+# Parsing is strict: unknown or duplicate keys are errors.
+# Validate with: peon check-config
+
+# Must match the host name agents use in "/run <host>".
+host: CHANGEME
+
+forgejo:
+  url: https://forgejo.internal
+  repos:
+    - owner/repo
+  # Numeric Forgejo user IDs, not usernames.
+  bot_user_id: 0        # the shared peon bot account (same on every host)
+  bot_token_file: /etc/peon/forgejo.token
+  approver_id: 0        # your account
+  requester_ids: []     # agent accounts allowed to propose jobs
+
+# Durations are strings such as 30m, 2h or 10s. Bare numbers are rejected.
+limits:
+  job_ttl: 30m
+  default_timeout: 10m
+  max_timeout: 2h
+  max_command_bytes: 4096
+  output_tail_lines: 50
+  poll_interval: 10s
+
+loki:
+  url: https://loki.internal
+  user: peon-CHANGEME
+  password_file: /etc/peon/loki.password
+
+grafana:
+  explore_url: https://grafana.internal/explore

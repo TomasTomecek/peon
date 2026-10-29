@@ -239,34 +239,38 @@ Posted by the bot when the job finishes:
 
 ## 10. Configuration
 
-`/etc/peon/config.toml` (root:peon, 0640)
+`/etc/peon/config.yaml` (root:peon, 0640)
 
-```toml
-host = "db1"
+Parsing is strict: unknown keys, duplicate keys and multiple YAML documents are errors, and durations must be strings such as `30m` (a bare `30` is rejected as ambiguous).
 
-[forgejo]
-url = "https://forgejo.internal"
-repos = ["ops/infra", "ops/agents"]
-bot_user_id = 31
-bot_token_file = "/etc/peon/forgejo.token"   # 0600 peon; same token on every host
-approver_id = 1
-requester_ids = [7, 8, 9]
+```yaml
+host: db1
 
-[limits]
-job_ttl = "30m"
-default_timeout = "10m"
-max_timeout = "2h"
-max_command_bytes = 4096
-output_tail_lines = 50
-poll_interval = "10s"
+forgejo:
+  url: https://forgejo.internal
+  repos:
+    - ops/infra
+    - ops/agents
+  bot_user_id: 31
+  bot_token_file: /etc/peon/forgejo.token   # 0600 peon; same token on every host
+  approver_id: 1
+  requester_ids: [7, 8, 9]
 
-[loki]
-url = "https://loki.internal"
-user = "peon-db1"
-password_file = "/etc/peon/loki.password"     # 0600 peon
+limits:
+  job_ttl: 30m
+  default_timeout: 10m
+  max_timeout: 2h
+  max_command_bytes: 4096
+  output_tail_lines: 50
+  poll_interval: 10s
 
-[grafana]
-explore_url = "https://grafana.internal/explore"
+loki:
+  url: https://loki.internal
+  user: peon-db1
+  password_file: /etc/peon/loki.password    # 0600 peon
+
+grafana:
+  explore_url: https://grafana.internal/explore
 ```
 
 Local state: SQLite at `/var/lib/peon/peon.db`, owned by `peon`, with a unique `job_id` and state transitions enforced in transactions.
