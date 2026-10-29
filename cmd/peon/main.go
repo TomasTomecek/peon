@@ -26,7 +26,7 @@ Options:
 }
 
 func main() {
-	cfgPath := flag.String("config", config.DefaultPath, "path to config.toml")
+	cfgPath := flag.String("config", config.DefaultPath, "path to config.yaml")
 	flag.Usage = usage
 	flag.Parse()
 

@@ -44,7 +44,7 @@ install -Dpm0755 %{name} %{buildroot}%{_bindir}/%{name}
 install -Dpm0644 dist/peon.service %{buildroot}%{_unitdir}/peon.service
 install -Dpm0644 dist/peon.sysusers %{buildroot}%{_sysusersdir}/peon.conf
 install -Dpm0644 dist/50-peon.rules %{buildroot}%{_datadir}/polkit-1/rules.d/50-peon.rules
-install -Dpm0640 dist/config.toml %{buildroot}%{_sysconfdir}/peon/config.toml
+install -Dpm0640 dist/config.yaml %{buildroot}%{_sysconfdir}/peon/config.yaml
 install -dm0750 %{buildroot}%{_sharedstatedir}/peon
 
 %pre
@@ -74,7 +74,7 @@ exit 0
 %{_sysusersdir}/peon.conf
 %{_datadir}/polkit-1/rules.d/50-peon.rules
 %dir %attr(0750,root,peon) %{_sysconfdir}/peon
-%config(noreplace) %attr(0640,root,peon) %{_sysconfdir}/peon/config.toml
+%config(noreplace) %attr(0640,root,peon) %{_sysconfdir}/peon/config.yaml
 %dir %attr(0750,peon,peon) %{_sharedstatedir}/peon
 
 %changelog

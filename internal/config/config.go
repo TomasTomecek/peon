@@ -1,67 +1,74 @@
-// Package config loads and validates /etc/peon/config.toml (SPEC.md §10).
+// Package config loads and validates /etc/peon/config.yaml (SPEC.md §10).
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 )
 
 // DefaultPath is where the RPM installs the configuration file.
-const DefaultPath = "/etc/peon/config.toml"
+const DefaultPath = "/etc/peon/config.yaml"
 
-// Duration wraps time.Duration so it can be written as "30m" in TOML.
+// Duration wraps time.Duration so it can be written as "30m" in YAML.
+// Only duration strings are accepted: a bare number like 30 is ambiguous
+// (seconds? nanoseconds?) and is rejected.
 type Duration struct{ time.Duration }
 
-func (d *Duration) UnmarshalText(text []byte) error {
-	v, err := time.ParseDuration(string(text))
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
+		return fmt.Errorf("line %d: %q is not a duration string such as \"30m\"", n.Line, n.Value)
+	}
+	v, err := time.ParseDuration(n.Value)
 	if err != nil {
-		return err
+		return fmt.Errorf("line %d: %w", n.Line, err)
 	}
 	d.Duration = v
 	return nil
 }
 
 type Config struct {
-	Host    string  `toml:"host"`
-	Forgejo Forgejo `toml:"forgejo"`
-	Limits  Limits  `toml:"limits"`
-	Loki    Loki    `toml:"loki"`
-	Grafana Grafana `toml:"grafana"`
+	Host    string  `yaml:"host"`
+	Forgejo Forgejo `yaml:"forgejo"`
+	Limits  Limits  `yaml:"limits"`
+	Loki    Loki    `yaml:"loki"`
+	Grafana Grafana `yaml:"grafana"`
 }
 
 type Forgejo struct {
-	URL          string   `toml:"url"`
-	Repos        []string `toml:"repos"`
-	BotUserID    int64    `toml:"bot_user_id"`
-	BotTokenFile string   `toml:"bot_token_file"`
-	ApproverID   int64    `toml:"approver_id"`
-	RequesterIDs []int64  `toml:"requester_ids"`
+	URL          string   `yaml:"url"`
+	Repos        []string `yaml:"repos"`
+	BotUserID    int64    `yaml:"bot_user_id"`
+	BotTokenFile string   `yaml:"bot_token_file"`
+	ApproverID   int64    `yaml:"approver_id"`
+	RequesterIDs []int64  `yaml:"requester_ids"`
 }
 
 type Limits struct {
-	JobTTL          Duration `toml:"job_ttl"`
-	DefaultTimeout  Duration `toml:"default_timeout"`
-	MaxTimeout      Duration `toml:"max_timeout"`
-	MaxCommandBytes int      `toml:"max_command_bytes"`
-	OutputTailLines int      `toml:"output_tail_lines"`
-	PollInterval    Duration `toml:"poll_interval"`
+	JobTTL          Duration `yaml:"job_ttl"`
+	DefaultTimeout  Duration `yaml:"default_timeout"`
+	MaxTimeout      Duration `yaml:"max_timeout"`
+	MaxCommandBytes int      `yaml:"max_command_bytes"`
+	OutputTailLines int      `yaml:"output_tail_lines"`
+	PollInterval    Duration `yaml:"poll_interval"`
 }
 
 type Loki struct {
-	URL          string `toml:"url"`
-	User         string `toml:"user"`
-	PasswordFile string `toml:"password_file"`
+	URL          string `yaml:"url"`
+	User         string `yaml:"user"`
+	PasswordFile string `yaml:"password_file"`
 }
 
 type Grafana struct {
-	ExploreURL string `toml:"explore_url"`
+	ExploreURL string `yaml:"explore_url"`
 }
 
 var (
@@ -81,19 +88,26 @@ func defaults() Config {
 }
 
 // Load parses the file at path, applies defaults and validates the result.
-// Unknown keys are an error: a typo in a security setting must not be ignored.
+// Parsing is strict: unknown keys, duplicate keys and multiple YAML
+// documents are errors, because a typo in a security setting must not be
+// silently ignored.
 func Load(path string) (*Config, error) {
-	c := defaults()
-	md, err := toml.DecodeFile(path, &c)
+	b, err := os.ReadFile(path)
 	if err != nil {
+		return nil, err
+	}
+	c := defaults()
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse %s: file is empty", path)
+		}
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if undec := md.Undecoded(); len(undec) > 0 {
-		keys := make([]string, len(undec))
-		for i, k := range undec {
-			keys[i] = k.String()
-		}
-		return nil, fmt.Errorf("unknown keys in %s: %s", path, strings.Join(keys, ", "))
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse %s: expected a single YAML document", path)
 	}
 	if err := c.Validate(); err != nil {
 		return nil, err
