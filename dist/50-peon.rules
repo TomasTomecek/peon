@@ -1,0 +1,18 @@
+// Allow the unprivileged peon daemon to start and stop its own job units,
+// and nothing else. See SPEC.md §7.1 and open question Q2.
+//
+// Fails closed: if systemd does not pass the unit name for a request,
+// unit is undefined, no rule matches and polkit denies it.
+polkit.addRule(function(action, subject) {
+    if (action.id != "org.freedesktop.systemd1.manage-units" ||
+        subject.user != "peon") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (unit && /^peon-job-[0-9A-HJKMNP-TV-Z]{26}\.service$/.test(unit) &&
+        (verb == "start" || verb == "stop")) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

@@ -1,0 +1,46 @@
+[Unit]
+Description=peon - run human-approved commands from Forgejo issues
+Documentation=https://github.com/TomasTomecek/peon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=peon
+Group=peon
+ExecStartPre=/usr/bin/peon --config /etc/peon/config.toml check-config
+ExecStart=/usr/bin/peon --config /etc/peon/config.toml run
+Restart=on-failure
+RestartSec=30s
+StateDirectory=peon
+StateDirectoryMode=0750
+UMask=0077
+
+# Hardening applies to the daemon only. Jobs run in separate transient
+# units (peon-job-<id>.service) started through systemd (SPEC.md §7.1).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

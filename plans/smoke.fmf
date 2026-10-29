@@ -1,0 +1,5 @@
+summary: Install the built RPM and run smoke tests
+discover:
+  how: fmf
+execute:
+  how: tmt

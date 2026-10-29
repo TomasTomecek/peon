@@ -1,0 +1,4 @@
+/peon
+/vendor/
+/peon-*.tar.gz
+*.rpm

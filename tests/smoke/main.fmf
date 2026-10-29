@@ -1,0 +1,5 @@
+summary: Binary runs, packaging is sane, config validation works
+test: ./test.sh
+duration: 5m
+require:
+  - systemd

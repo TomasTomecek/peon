@@ -1,0 +1,42 @@
+# https://packit.dev/docs/configuration
+specfile_path: peon.spec
+upstream_package_name: peon
+downstream_package_name: peon
+upstream_tag_template: "v{version}"
+
+srpm_build_deps:
+  - golang
+  - git
+  - rpm-build
+
+actions:
+  create-archive:
+    - bash packaging/create-archive.sh
+
+jobs:
+  # RPMs for every pull request, so packaging breaks show up in review.
+  - job: copr_build
+    trigger: pull_request
+    targets:
+      - fedora-all
+
+  - job: tests
+    trigger: pull_request
+    targets:
+      - fedora-all
+
+  # Installable RPMs from main, for your servers:
+  #   dnf copr enable <owner>/peon
+  - job: copr_build
+    trigger: commit
+    branch: main
+    project: peon
+    targets:
+      - fedora-all
+
+  # Tagged releases (vX.Y.Z) into a separate, stable Copr project.
+  - job: copr_build
+    trigger: release
+    project: peon-releases
+    targets:
+      - fedora-all
