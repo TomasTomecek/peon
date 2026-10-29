@@ -38,13 +38,13 @@ The operator must be able to approve these commands from a phone, without being 
 |---|---|
 | Prompt-injected or compromised agent proposes a malicious command | Human review is the control. The bot comment shows the command verbatim and flags hard-to-read content (§5.3). |
 | Agent edits a comment after (or while) the operator reads it | The command is executed from the daemon's local copy, never from Forgejo. The bot comment must be unedited at approval time (§6). |
-| Agent spoofs a bot proposal comment | Only comments authored by the host's own bot **user ID** are considered. |
+| Agent spoofs a bot proposal comment | Only comments authored by the peon bot **user ID** are considered, and only for job IDs that exist in the daemon's local state. A card a daemon didn't create is ignored. |
 | Agent reacts 👍 itself | Only reactions from the configured approver **user ID** count. |
 | Replay of an old approval | Job IDs are single-use and enforced in local state. Approvals expire. |
 | Root command erases its own audit trail | The start record is pushed to Loki before execution. The daemon's Loki credential is push-only. |
 | Secrets leaked into issues via command output | `--private` flag: output goes to Loki only (§8.2). |
 | Bugs in the network-facing daemon | The daemon runs unprivileged and heavily sandboxed. Root execution goes through systemd via a narrow polkit rule (§7.1). This limits damage from bugs (path traversal, stray writes). It does **not** contain an attacker with code execution in the daemon: whoever can start a root transient unit is root-equivalent. See Q2. |
-| Compromise of one host's bot token | Per-host bot accounts. A token can only produce proposals that host's daemon trusts. |
+| Compromise of one host (and so the shared bot token) | The bot is not a requester, so its token cannot create jobs on any host; jobs exist only from a `/run` by an allowed requester. A stolen token **can** edit other hosts' job cards (they become `tampered`, which is a denial of service) and post fake result comments. Loki is the authoritative record of what ran, not the issue. Revoking the token affects every host. |
 | Operator Forgejo account compromise | **Out of scope.** Forgejo has no public route. The operator token/session must never be given to any agent. |
 
 ---
@@ -55,7 +55,7 @@ The operator must be able to approve these commands from a phone, without being 
 |---|---|
 | **Approver** | The operator's Forgejo user. Configured by numeric **user ID**, not username. |
 | **Requesters** | Allowlist of Forgejo user IDs allowed to propose jobs (agents, and optionally the operator). |
-| **Host bot** | One Forgejo user per host, e.g. `peon-db1`. Posts proposal and result comments. Its token is scoped to issue read/write on watched repos only. |
+| **Bot** | One Forgejo user, `peon`, shared by every host. Posts proposal and result comments. Its token is scoped to issue read/write on watched repos only, and it must never be in `requester_ids`. Cards and results always name the host, because the author no longer does. |
 
 ---
 
@@ -107,7 +107,7 @@ When a valid `/run` is seen, the daemon creates a job in local state:
 
 ### 5.2 Bot comment
 
-The host bot posts a comment on the issue:
+The bot posts a comment on the issue:
 
 ````
 🪓 peon job `01JB…` on **db1**
@@ -152,7 +152,7 @@ The daemon polls reactions on the open job's bot comment. A job is approved only
 2. No 👎 (`-1`) reaction from `approver_id` exists.
 3. The bot comment's current body matches the stored bytes exactly.
 4. The bot comment was never edited (`updated_at == created_at`; see open question Q1).
-5. The comment author is the host bot user ID.
+5. The comment author is the bot user ID, and the job ID on the card exists in local state.
 6. `now < expires_at`.
 7. The job state is `proposed` (single-use).
 
@@ -219,7 +219,7 @@ All terminal states are final. A job ID can never return to `proposed`.
 
 ### 8.2 Result comment
 
-Posted by the host bot when the job finishes:
+Posted by the bot when the job finishes:
 
 - Status, exit code, duration.
 - Last `output_tail_lines` lines (default 50, max 4 KB) of combined output, unless `--private`.
@@ -248,7 +248,7 @@ host = "db1"
 url = "https://forgejo.internal"
 repos = ["ops/infra", "ops/agents"]
 bot_user_id = 31
-bot_token_file = "/etc/peon/forgejo.token"   # 0600 peon
+bot_token_file = "/etc/peon/forgejo.token"   # 0600 peon; same token on every host
 approver_id = 1
 requester_ids = [7, 8, 9]
 
@@ -278,7 +278,7 @@ Local state: SQLite at `/var/lib/peon/peon.db`, owned by `peon`, with a unique `
 - Go, a single static binary.
 - `peon.service` with systemd hardening on the daemon: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `ReadWritePaths=/var/lib/peon`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and so on. These apply to the daemon only, not the job units.
 - `peon version` and `peon check-config` subcommands. `check-config` runs as `ExecStartPre`, so a bad config stops the service before it polls anything.
-- Packaged as an RPM (`peon.spec`). Packit builds it in Copr for every pull request and every commit to `main`, and runs tmt smoke tests against the installed package. The source tarball vendors Go modules so builds are offline.
+- Packaged as an RPM (`peon.spec`) for Fedora and EPEL 10. Packit builds it in Copr for every pull request and every commit to `main`, and runs tmt smoke tests against the installed package. The source tarball vendors Go modules so builds are offline.
 
 ---
 

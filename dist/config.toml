@@ -9,7 +9,7 @@ host = "CHANGEME"
 url = "https://forgejo.internal"
 repos = ["owner/repo"]
 # Numeric Forgejo user IDs, not usernames.
-bot_user_id = 0       # this host's bot account, e.g. peon-db1
+bot_user_id = 0       # the shared peon bot account (same on every host)
 bot_token_file = "/etc/peon/forgejo.token"
 approver_id = 0       # your account
 requester_ids = []    # agent accounts allowed to propose jobs

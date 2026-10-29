@@ -33,13 +33,13 @@ RPMs are built by [Packit](https://packit.dev) in Copr on every commit to
 `main`:
 
 ```
-dnf copr enable <owner>/peon
+dnf copr enable <owner>/peon    # Fedora and EPEL 10
 dnf install peon
 ```
 
 Then:
 
-1. Create the host's bot account in Forgejo (e.g. `peon-db1`) and a token
+1. Once, for all hosts: create a `peon` bot account in Forgejo and a token
    with issue read/write on the watched repos.
 2. Write the token to `/etc/peon/forgejo.token` and the Loki push password
    to `/etc/peon/loki.password`, both `peon:peon` mode `0600`.
