@@ -46,6 +46,7 @@ func (d *Daemon) event(ctx context.Context, j *job.Job, name string, extra map[s
 		"card_comment_id":   j.CardCommentID,
 		"requester":         j.Record.Requester,
 		"requester_id":      j.Record.RequesterID,
+		"user":              j.Record.User,
 	}
 	if j.Approver != "" {
 		rec["approver"] = j.Approver
@@ -191,7 +192,7 @@ func (d *Daemon) runJob(ctx context.Context, j *job.Job) {
 		}
 	}()
 
-	res := d.exec.Run(ctx, executor.Spec{JobID: j.Record.JobID, Command: j.Record.Command, Timeout: j.Record.Timeout},
+	res := d.exec.Run(ctx, executor.Spec{JobID: j.Record.JobID, Command: j.Record.Command, Timeout: j.Record.Timeout, User: j.Record.User},
 		func(l string) { out.Add(d.Now(), l); tl.add(l) },
 		func(l string) { errs.Add(d.Now(), l); tl.add(l) })
 

@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/TomasTomecek/peon/internal/config"
@@ -51,14 +53,21 @@ func main() {
 		fmt.Println("peon", version)
 	case "check-config":
 		c, err := config.Load(*cfgPath)
+		if err == nil {
+			err = c.CheckHost(lookupUser, config.LingerDir)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "peon: invalid configuration:\n%v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("%s: OK (host %s, %d repo(s), approver %d)\n",
-			*cfgPath, c.Host, len(c.Forgejo.Repos), c.Forgejo.ApproverID)
+		fmt.Printf("%s: OK (host %s, %d repo(s), approver %d, jobs as %s, default %s)\n",
+			*cfgPath, c.Host, len(c.Forgejo.Repos), c.Forgejo.ApproverID,
+			strings.Join(c.Jobs.AllowedUsers, "/"), c.Jobs.DefaultUser)
 	case "run":
 		c, err := config.Load(*cfgPath)
+		if err == nil {
+			err = c.CheckHost(lookupUser, config.LingerDir)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "peon: invalid configuration:\n%v\n", err)
 			os.Exit(1)
@@ -71,6 +80,11 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+func lookupUser(name string) error {
+	_, err := user.Lookup(name)
+	return err
 }
 
 // defaultStateDir follows systemd's StateDirectory= when set.

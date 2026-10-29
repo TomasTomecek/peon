@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,19 +81,22 @@ func TestLoadRejects(t *testing.T) {
 	cases := map[string]struct {
 		from, to, want string
 	}{
-		"approver is bot":    {"approver_id: 1", "approver_id: 31", "must differ from bot_user_id"},
-		"bot is requester":   {"requester_ids: [7, 8]", "requester_ids: [7, 31]", "must not contain bot_user_id"},
-		"unknown key":        {"  job_ttl: 15m", "  job_ttl: 15m\n  job_tll: 1m", "field job_tll not found"},
-		"duplicate key":      {"  job_ttl: 15m", "  job_ttl: 15m\n  job_ttl: 1m", "already defined"},
-		"bare number ttl":    {"  job_ttl: 15m", "  job_ttl: 900", "not a duration string"},
-		"bad duration":       {"  job_ttl: 15m", "  job_ttl: soon", "invalid duration"},
-		"id as string":       {"approver_id: 1", `approver_id: "one"`, "cannot unmarshal"},
-		"bad host":           {"host: db1", "host: DB_1", "lowercase DNS label"},
-		"bad repo":           {"    - ops/infra", "    - infra", "not owner/name"},
-		"timeout over max":   {"  job_ttl: 15m", "  job_ttl: 15m\n  default_timeout: 3h", "exceeds limits.max_timeout"},
-		"non-http loki":      {"url: https://loki.internal", "url: loki.internal", "loki.url"},
-		"missing token file": {`bot_token_file: "@TOKEN@"`, "bot_token_file: /nonexistent/token", "bot_token_file"},
-		"two documents":      {"host: db1", "host: db1\n---\nhost: db2", "single YAML document"},
+		"approver is bot":     {"approver_id: 1", "approver_id: 31", "must differ from bot_user_id"},
+		"bot is requester":    {"requester_ids: [7, 8]", "requester_ids: [7, 31]", "must not contain bot_user_id"},
+		"unknown key":         {"  job_ttl: 15m", "  job_ttl: 15m\n  job_tll: 1m", "field job_tll not found"},
+		"duplicate key":       {"  job_ttl: 15m", "  job_ttl: 15m\n  job_ttl: 1m", "already defined"},
+		"bare number ttl":     {"  job_ttl: 15m", "  job_ttl: 900", "not a duration string"},
+		"bad duration":        {"  job_ttl: 15m", "  job_ttl: soon", "invalid duration"},
+		"id as string":        {"approver_id: 1", `approver_id: "one"`, "cannot unmarshal"},
+		"bad host":            {"host: db1", "host: DB_1", "lowercase DNS label"},
+		"bad repo":            {"    - ops/infra", "    - infra", "not owner/name"},
+		"timeout over max":    {"  job_ttl: 15m", "  job_ttl: 15m\n  default_timeout: 3h", "exceeds limits.max_timeout"},
+		"non-http loki":       {"url: https://loki.internal", "url: loki.internal", "loki.url"},
+		"missing token file":  {`bot_token_file: "@TOKEN@"`, "bot_token_file: /nonexistent/token", "bot_token_file"},
+		"two documents":       {"host: db1", "host: db1\n---\nhost: db2", "single YAML document"},
+		"default not allowed": {"limits:", "jobs:\n  default_user: postgres\nlimits:", "must be in jobs.allowed_users"},
+		"bad user name":       {"limits:", "jobs:\n  allowed_users: [root, \"Bob Smith\"]\nlimits:", "not a valid user name"},
+		"duplicate user":      {"limits:", "jobs:\n  allowed_users: [root, root]\nlimits:", "listed twice"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -124,5 +128,42 @@ func TestSecretFilePermissions(t *testing.T) {
 	_, err := Load(p)
 	if err == nil || !strings.Contains(err.Error(), "too open") {
 		t.Fatalf("error = %v, want permission error", err)
+	}
+}
+
+func TestJobsDefaults(t *testing.T) {
+	c, err := Load(writeConfig(t, valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Jobs.DefaultUser != "root" || len(c.Jobs.AllowedUsers) != 1 || !c.UserAllowed("root") || c.UserAllowed("postgres") {
+		t.Fatalf("jobs = %+v", c.Jobs)
+	}
+	c, err = Load(writeConfig(t, strings.Replace(valid, "limits:", "jobs:\n  default_user: deploy\n  allowed_users: [root, deploy, postgres]\nlimits:", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Jobs.DefaultUser != "deploy" || !c.UserAllowed("postgres") {
+		t.Fatalf("jobs = %+v", c.Jobs)
+	}
+}
+
+func TestCheckHost(t *testing.T) {
+	linger := t.TempDir()
+	os.WriteFile(filepath.Join(linger, "deploy"), nil, 0o644)
+	lookup := func(u string) error {
+		if u == "ghost" {
+			return errors.New("unknown user")
+		}
+		return nil
+	}
+	c := &Config{Jobs: Jobs{DefaultUser: "root", AllowedUsers: []string{"root", "deploy"}}}
+	if err := c.CheckHost(lookup, linger); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	c.Jobs.AllowedUsers = []string{"root", "deploy", "postgres", "ghost"}
+	err := c.CheckHost(lookup, linger)
+	if err == nil || !strings.Contains(err.Error(), "loginctl enable-linger postgres") || !strings.Contains(err.Error(), `"ghost": unknown user`) {
+		t.Fatalf("error = %v", err)
 	}
 }

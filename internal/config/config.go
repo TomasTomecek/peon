@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -39,6 +40,7 @@ type Config struct {
 	Host    string  `yaml:"host"`
 	Forgejo Forgejo `yaml:"forgejo"`
 	Limits  Limits  `yaml:"limits"`
+	Jobs    Jobs    `yaml:"jobs"`
 	Loki    Loki    `yaml:"loki"`
 	Grafana Grafana `yaml:"grafana"`
 }
@@ -61,6 +63,14 @@ type Limits struct {
 	PollInterval    Duration `yaml:"poll_interval"`
 }
 
+// Jobs controls which users jobs may run as (SPEC.md §7.4).
+type Jobs struct {
+	// DefaultUser runs jobs that do not ask for a --user.
+	DefaultUser string `yaml:"default_user"`
+	// AllowedUsers lists every user a job may run as.
+	AllowedUsers []string `yaml:"allowed_users"`
+}
+
 type Loki struct {
 	URL          string `yaml:"url"`
 	User         string `yaml:"user"`
@@ -76,12 +86,15 @@ type Grafana struct {
 }
 
 var (
+	// UserRe matches the user names peon accepts: a conservative subset of
+	// what shadow-utils allows, so a name is never ambiguous on a card.
+	UserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	hostRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
 func defaults() Config {
-	return Config{Limits: Limits{
+	return Config{Jobs: Jobs{DefaultUser: "root", AllowedUsers: []string{"root"}}, Limits: Limits{
 		JobTTL:          Duration{30 * time.Minute},
 		DefaultTimeout:  Duration{10 * time.Minute},
 		MaxTimeout:      Duration{2 * time.Hour},
@@ -180,6 +193,20 @@ func (c *Config) Validate() error {
 		bad("limits.poll_interval: must be at least 1s")
 	}
 
+	seen := map[string]bool{}
+	for _, u := range c.Jobs.AllowedUsers {
+		if !UserRe.MatchString(u) {
+			bad("jobs.allowed_users: %q is not a valid user name", u)
+		}
+		if seen[u] {
+			bad("jobs.allowed_users: %q listed twice", u)
+		}
+		seen[u] = true
+	}
+	if !seen[c.Jobs.DefaultUser] {
+		bad("jobs.default_user %q must be in jobs.allowed_users", c.Jobs.DefaultUser)
+	}
+
 	checkURL("loki.url", c.Loki.URL, bad)
 	if c.Loki.User == "" {
 		bad("loki.user: required")
@@ -229,4 +256,38 @@ func ReadSecret(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+// UserAllowed reports whether jobs may run as name.
+func (c *Config) UserAllowed(name string) bool {
+	for _, u := range c.Jobs.AllowedUsers {
+		if u == name {
+			return true
+		}
+	}
+	return false
+}
+
+// LingerDir is where logind records users with lingering enabled.
+const LingerDir = "/var/lib/systemd/linger"
+
+// CheckHost verifies the parts of the configuration that depend on this
+// host: every allowed user exists, and every non-root one has lingering
+// enabled so their systemd user manager runs without a login. lookup
+// returns an error for an unknown user; lingerDir is normally LingerDir.
+func (c *Config) CheckHost(lookup func(string) error, lingerDir string) error {
+	var errs []error
+	for _, u := range c.Jobs.AllowedUsers {
+		if err := lookup(u); err != nil {
+			errs = append(errs, fmt.Errorf("jobs.allowed_users: user %q: %w", u, err))
+			continue
+		}
+		if u == "root" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(lingerDir, u)); err != nil {
+			errs = append(errs, fmt.Errorf("jobs.allowed_users: user %q has no lingering systemd user manager; run: loginctl enable-linger %s", u, u))
+		}
+	}
+	return errors.Join(errs...)
 }

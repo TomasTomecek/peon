@@ -97,10 +97,11 @@ func TestBadRequestsGetOneReply(t *testing.T) {
 		body string
 		want string
 	}{
-		"not a requester": {strangerID, runRestart, "not allowed to request jobs"},
-		"unknown flag":    {agentID, "/run db1 --sudo\n```\nx\n```", "unknown flag"},
-		"over max":        {agentID, "/run db1 --timeout=3h\n```\nx\n```", "over this host's maximum"},
-		"non-ascii":       {agentID, "/run db1\n```\nrm -rf /tmp/\u200bx\n```", "not printable ASCII"},
+		"not a requester":  {strangerID, runRestart, "not allowed to request jobs"},
+		"unknown flag":     {agentID, "/run db1 --sudo\n```\nx\n```", "unknown flag"},
+		"over max":         {agentID, "/run db1 --timeout=3h\n```\nx\n```", "over this host's maximum"},
+		"non-ascii":        {agentID, "/run db1\n```\nrm -rf /tmp/\u200bx\n```", "not printable ASCII"},
+		"user not allowed": {agentID, "/run db1 --user=postgres\n```\npsql\n```", `may not run as "postgres" (allowed: root, deploy)`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -492,5 +493,33 @@ func TestFirstStartMarksExistingRunCommentsHandled(t *testing.T) {
 	h.tick()
 	if len(h.st.Jobs) != 0 || len(h.fj.botComments()) != 0 {
 		t.Fatal("acted on a /run comment from before the first start")
+	}
+}
+
+func TestRunAsUser(t *testing.T) {
+	h := newHarness(t)
+	card, id := h.propose("/run db1 --user=deploy\n```\npodman ps\n```")
+	if !strings.Contains(h.lastBot(), "Runs as **deploy** (in their systemd user manager)") {
+		t.Fatalf("card:\n%s", h.lastBot())
+	}
+	h.fj.react(card, approverID, "+1")
+	h.tickAndWait()
+	runs := h.exec.runs()
+	if len(runs) != 1 || runs[0].User != "deploy" || runs[0].Command != "podman ps" {
+		t.Fatalf("runs %+v", runs)
+	}
+	var started map[string]any
+	json.Unmarshal([]byte(h.loki.lines(id, "started")[0]), &started)
+	if started["user"] != "deploy" {
+		t.Fatalf("started record %v", started)
+	}
+}
+
+func TestDefaultUserApplies(t *testing.T) {
+	h := newHarness(t)
+	h.d.cfg.Jobs.DefaultUser = "deploy"
+	_, id := h.propose(runRestart)
+	if got := h.st.Jobs[id].Record.User; got != "deploy" {
+		t.Fatalf("user = %q", got)
 	}
 }
