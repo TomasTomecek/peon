@@ -4,12 +4,10 @@ set -euxo pipefail
 
 peon version
 
-# User and permissions from the package.
-getent passwd peon
-test "$(stat -c '%U:%G %a' /etc/peon)" = "root:peon 750"
-test "$(stat -c '%U:%G %a' /etc/peon/config.yaml)" = "root:peon 640"
-test "$(stat -c '%U:%G %a' /var/lib/peon)" = "peon:peon 750"
-test -f /usr/share/polkit-1/rules.d/50-peon.rules
+# Permissions from the package.
+test "$(stat -c '%U:%G %a' /etc/peon)" = "root:root 700"
+test "$(stat -c '%U:%G %a' /etc/peon/config.yaml)" = "root:root 600"
+test "$(stat -c '%U:%G %a' /var/lib/peon)" = "root:root 700"
 
 # The unit file must parse cleanly.
 systemd-analyze verify /usr/lib/systemd/system/peon.service

@@ -43,7 +43,7 @@ Then:
 1. Once, for all hosts: create a `peon` bot account in Forgejo and a token
    with issue read/write on the watched repos.
 2. Write the token to `/etc/peon/forgejo.token` and the Loki push password
-   to `/etc/peon/loki.password`, both `peon:peon` mode `0600`.
+   to `/etc/peon/loki.password`, both `root:root` mode `0600`.
 3. Fill in `/etc/peon/config.yaml` and run `peon check-config`.
 4. `systemctl enable --now peon`
 

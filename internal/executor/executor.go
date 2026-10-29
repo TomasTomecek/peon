@@ -37,8 +37,7 @@ type Executor interface {
 	Stop(ctx context.Context, jobID string) error
 }
 
-// UnitName is the systemd unit a job runs in. The polkit rule
-// (dist/50-peon.rules) allows exactly this name pattern.
+// UnitName is the systemd unit a job runs in.
 func UnitName(jobID string) string { return "peon-job-" + jobID + ".service" }
 
 type Systemd struct {
