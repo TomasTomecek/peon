@@ -17,11 +17,9 @@ ExclusiveArch:  %{?golang_arches}%{!?golang_arches:x86_64 aarch64 ppc64le s390x 
 
 BuildRequires:  golang >= 1.22
 BuildRequires:  systemd-rpm-macros
-Requires:       polkit
-# systemd 257 is the first release that tells polkit the unit name for
-# transient units; dist/50-peon.rules depends on it.
+# peon.service drops all capabilities. systemd 257+ authorizes managing
+# units by the caller's UID 0 alone; older releases check CAP_SYS_ADMIN.
 Requires:       systemd >= 257
-Requires(pre):  shadow-utils
 %{?systemd_requires}
 
 %description
@@ -47,19 +45,8 @@ go test ./...
 %install
 install -Dpm0755 %{name} %{buildroot}%{_bindir}/%{name}
 install -Dpm0644 dist/peon.service %{buildroot}%{_unitdir}/peon.service
-install -Dpm0644 dist/peon.sysusers %{buildroot}%{_sysusersdir}/peon.conf
-install -Dpm0644 dist/50-peon.rules %{buildroot}%{_datadir}/polkit-1/rules.d/50-peon.rules
-install -Dpm0640 dist/config.yaml %{buildroot}%{_sysconfdir}/peon/config.yaml
-install -dm0750 %{buildroot}%{_sharedstatedir}/peon
-
-%pre
-# Created here as well as via sysusers.d so the user exists before the
-# files owned by it are laid down, on every supported release.
-getent group peon >/dev/null || groupadd -r peon
-getent passwd peon >/dev/null || \
-    useradd -r -g peon -d %{_sharedstatedir}/peon -s /usr/sbin/nologin \
-            -c "peon daemon" peon
-exit 0
+install -Dpm0600 dist/config.yaml %{buildroot}%{_sysconfdir}/peon/config.yaml
+install -dm0700 %{buildroot}%{_sharedstatedir}/peon
 
 %post
 %systemd_post peon.service
@@ -76,12 +63,10 @@ exit 0
 %doc README.md SPEC.md
 %{_bindir}/%{name}
 %{_unitdir}/peon.service
-%{_sysusersdir}/peon.conf
-%{_datadir}/polkit-1/rules.d/50-peon.rules
-%dir %attr(0750,root,peon) %{_sysconfdir}/peon
-%config(noreplace) %attr(0640,root,peon) %{_sysconfdir}/peon/config.yaml
-%dir %attr(0750,peon,peon) %{_sharedstatedir}/peon
+%dir %attr(0700,root,root) %{_sysconfdir}/peon
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/peon/config.yaml
+%dir %attr(0700,root,root) %{_sharedstatedir}/peon
 
 %changelog
 * Thu Oct 29 2026 Tomas Tomecek <tomas@tomecek.net> - 0.1.0-1
-- Initial package: config validation, systemd unit, polkit rule
+- Initial package: daemon, systemd unit

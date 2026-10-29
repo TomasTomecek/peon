@@ -6,18 +6,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=peon
-Group=peon
 ExecStartPre=/usr/bin/peon --config /etc/peon/config.yaml check-config
 ExecStart=/usr/bin/peon --config /etc/peon/config.yaml run
 Restart=on-failure
 RestartSec=30s
 StateDirectory=peon
-StateDirectoryMode=0750
+StateDirectoryMode=0700
 UMask=0077
 
-# Hardening applies to the daemon only. Jobs run in separate transient
-# units (peon-job-<id>.service) started through systemd (SPEC.md §7.1).
+# peon runs as root so it can ask systemd to start job units, but with no
+# capabilities and a tight sandbox: the process that parses Forgejo input
+# cannot touch the system itself. Jobs run in separate transient units
+# (peon-job-<id>.service), which this hardening does not apply to.
+# (SPEC.md §7.1)
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=

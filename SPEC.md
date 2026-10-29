@@ -43,7 +43,7 @@ The operator must be able to approve these commands from a phone, without being 
 | Replay of an old approval | Job IDs are single-use and enforced in local state. Approvals expire. |
 | Root command erases its own audit trail | The start record is pushed to Loki before execution. The daemon's Loki credential is push-only. |
 | Secrets leaked into issues via command output | `--private` flag: output goes to Loki only (§8.2). |
-| Bugs in the network-facing daemon | The daemon runs unprivileged and heavily sandboxed. Root execution goes through systemd via a narrow polkit rule (§7.1). This limits damage from bugs (path traversal, stray writes). It does **not** contain an attacker with code execution in the daemon: whoever can start a root transient unit is root-equivalent. See Q2. |
+| Bugs in the network-facing daemon | The daemon runs as root but with **no capabilities** and a tight systemd sandbox (read-only system, no devices, restricted syscalls), so a bug such as a stray write cannot touch the host directly. It does **not** contain an attacker with code execution in the daemon: it can ask systemd to start a root unit. The approval flow is the control, not the sandbox. A polkit-based unprivileged daemon was designed and dropped for simplicity; see Q2. |
 | Compromise of one host (and so the shared bot token) | The bot is not a requester, so its token cannot create jobs on any host; jobs exist only from a `/run` by an allowed requester. A stolen token **can** edit other hosts' job cards (they become `tampered`, which is a denial of service) and post fake result comments. Loki is the authoritative record of what ran, not the issue. Revoking the token affects every host. |
 | Operator Forgejo account compromise | **Out of scope.** Forgejo has no public route. The operator token/session must never be given to any agent. |
 
@@ -168,10 +168,9 @@ A 👎 from the approver moves the job to `rejected` (terminal).
 
 ## 7. Execution
 
-### 7.1 Privilege separation
+### 7.1 Running jobs
 
-- `peon.service` runs as an unprivileged user `peon`.
-- A polkit rule allows user `peon` to start and stop units named `peon-job-<ULID>.service`, and nothing else. This relies on systemd passing the unit name to polkit for transient units, which it does since **systemd 257** (Fedora 43+, EL10); the RPM requires it.
+- `peon.service` runs as root with an empty capability bounding set, `NoNewPrivileges=yes`, `ProtectSystem=strict` and the other sandboxing in the unit file. systemd lets it manage units because its effective UID is 0, which systemd checks by UID alone since **systemd 257**; the RPM requires it.
 - Jobs run as root in a transient unit:
 
 ```
@@ -249,7 +248,7 @@ Posted by the bot when the job finishes:
 
 ## 10. Configuration
 
-`/etc/peon/config.yaml` (root:peon, 0640)
+`/etc/peon/config.yaml` (root:root, 0600)
 
 Parsing is strict: unknown keys, duplicate keys and multiple YAML documents are errors, and durations must be strings such as `30m` (a bare `30` is rejected as ambiguous).
 
@@ -262,7 +261,7 @@ forgejo:
     - ops/infra
     - ops/agents
   bot_user_id: 31
-  bot_token_file: /etc/peon/forgejo.token   # 0600 peon; same token on every host
+  bot_token_file: /etc/peon/forgejo.token   # root 0600; same token on every host
   approver_id: 1
   requester_ids: [7, 8, 9]
 
@@ -277,7 +276,7 @@ limits:
 loki:
   url: https://loki.internal
   user: peon-db1
-  password_file: /etc/peon/loki.password    # 0600 peon
+  password_file: /etc/peon/loki.password    # root 0600
 
 grafana:
   explore_url: https://grafana.internal/explore
@@ -300,6 +299,6 @@ Local state: `/var/lib/peon/state.json`, owned by `peon`, replaced atomically (w
 ## 12. Open questions
 
 - **Q1.** Does adding a reaction change a comment's `updated_at` in Forgejo? If it does, check 4 needs another approach, such as Forgejo's comment content-history, or relying on body comparison alone.
-- **Q2.** ~~Can the polkit rule match transient unit names?~~ **Resolved:** systemd ≥ 257 passes `unit` and `verb=start` for `StartTransientUnit` (older releases pass no details, so the rule denies everything there). Still, the `peon` user is root-equivalent, because it chooses the command a root unit runs. If that matters, the stronger design is a split: a tiny root helper that verifies the approval itself (re-reading the Forgejo comment and reactions with its own read-only token) before running anything, so a compromised daemon cannot run unapproved commands.
+- **Q2.** ~~Unprivileged daemon via polkit?~~ **Dropped for now.** It would run the daemon as a `peon` user with a polkit rule allowing only `peon-job-<ULID>.service` start/stop (systemd ≥ 257 passes the unit name to polkit for transient units; older releases pass none). It only contains bugs, not attackers, since the `peon` user chooses what root units run. If that is ever wanted, the stronger design is a small root helper that re-verifies the approval in Forgejo itself before running anything.
 - **Q3.** Should the operator be able to edit a command before approving (for example, reply `/amend` with a new block), or must the agent always re-propose? Current answer: re-propose. Simpler and safer.
 - **Q4.** Loki tenancy: one tenant for all peons, or per host?

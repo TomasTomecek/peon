@@ -1,5 +1,5 @@
 # peon configuration. See SPEC.md §10.
-# This file is root:peon 0640. Secret files must be peon-owned and 0600.
+# This file and the secret files it names are root-owned and 0600.
 # Parsing is strict: unknown or duplicate keys are errors.
 # Validate with: peon check-config
 
