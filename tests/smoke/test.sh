@@ -9,6 +9,10 @@ test "$(stat -c '%U:%G %a' /etc/peon)" = "root:root 700"
 test "$(stat -c '%U:%G %a' /etc/peon/config.yaml)" = "root:root 600"
 test "$(stat -c '%U:%G %a' /var/lib/peon)" = "root:root 700"
 
+# status works on a fresh install, before the daemon ever ran.
+peon status | grep -q "Running"
+peon status --json | grep -q '"queued": \[\]'
+
 # The unit file must parse cleanly.
 systemd-analyze verify /usr/lib/systemd/system/peon.service
 

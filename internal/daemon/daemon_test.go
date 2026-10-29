@@ -751,3 +751,39 @@ func TestRejectedTokenKeepsCommentsQueued(t *testing.T) {
 		t.Fatalf("outbox %d, comments %d", len(h.st.Outbox), len(h.resultComments()))
 	}
 }
+
+func TestHealthRecordedForStatus(t *testing.T) {
+	h := newHarness(t)
+	card, _ := h.propose(runRestart)
+	if h.st.Health.ForgejoOK.IsZero() || h.st.Health.LastPoll.IsZero() || h.st.Health.LokiOK.IsZero() {
+		t.Fatalf("health %+v", h.st.Health)
+	}
+	h.loki.setFail(true)
+	h.fj.react(card, approverID, "+1")
+	h.clock.Add(time.Minute)
+	h.tick()
+	if h.st.Health.LokiError == "" || !h.st.Health.ForgejoOK.Equal(h.clock.Now()) {
+		t.Fatalf("health %+v", h.st.Health)
+	}
+	h.loki.setFail(false)
+	h.tickAndWait()
+	if h.st.Health.LokiError != "" {
+		t.Fatalf("loki error not cleared: %+v", h.st.Health)
+	}
+}
+
+func TestHealthShowsForgejoBackoff(t *testing.T) {
+	h := newHarness(t)
+	h.fj.setReadErr(errUnreachable)
+	h.tick()
+	hl := h.st.Health
+	if hl.ForgejoError == "" || !hl.ForgejoRetryAt.After(h.clock.Now()) {
+		t.Fatalf("health %+v", hl)
+	}
+	h.fj.setReadErr(nil)
+	h.clock.Add(time.Minute)
+	h.tick()
+	if hl := h.st.Health; hl.ForgejoError != "" || !hl.ForgejoRetryAt.IsZero() || !hl.ForgejoOK.Equal(h.clock.Now()) {
+		t.Fatalf("health not cleared: %+v", hl)
+	}
+}

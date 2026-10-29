@@ -29,6 +29,9 @@ type Data struct {
 	Jobs    map[string]*job.Job `json:"jobs"`
 	// Outbox holds comments peon still has to post, oldest first.
 	Outbox []*Outgoing `json:"outbox,omitempty"`
+	// Health records when peon last reached Forgejo and Loki, for
+	// "peon status".
+	Health Health `json:"health"`
 }
 
 // Outgoing is a comment waiting to be posted to Forgejo.
@@ -43,6 +46,37 @@ type Outgoing struct {
 	Attempts    int       `json:"attempts"`
 	NextAttempt time.Time `json:"next_attempt"`
 	LastError   string    `json:"last_error,omitempty"`
+}
+
+type Health struct {
+	LastPoll     time.Time `json:"last_poll,omitempty"`
+	ForgejoOK    time.Time `json:"forgejo_ok,omitempty"`
+	ForgejoError string    `json:"forgejo_error,omitempty"`
+	// ForgejoRetryAt is set while peon backs off from a failing Forgejo.
+	ForgejoRetryAt time.Time `json:"forgejo_retry_at,omitempty"`
+	LokiOK         time.Time `json:"loki_ok,omitempty"`
+	LokiError      string    `json:"loki_error,omitempty"`
+}
+
+// Read loads a state file without locking it, for read-only inspection
+// while the daemon runs. Saves are atomic renames, so a reader always sees
+// a complete file. A missing file is an empty state.
+func Read(path string) (*Data, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return &Data{Version: version}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var d Data
+	if err := json.Unmarshal(b, &d); err != nil {
+		return nil, fmt.Errorf("state %s is corrupt: %w", path, err)
+	}
+	if d.Version != version {
+		return nil, fmt.Errorf("state %s has version %d, this peon understands %d", path, d.Version, version)
+	}
+	return &d, nil
 }
 
 type Store struct {

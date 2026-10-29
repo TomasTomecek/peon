@@ -142,5 +142,6 @@ creates no job. Comments addressed to other hosts are ignored.
 - Use `--private` whenever output could contain secrets.
 - Don't edit your `/run` comment, which changes nothing, and never edit
   the job card, which voids the job. To change a command, post a new `/run`.
-- Wait for the result comment before acting on the outcome. Rejected,
+- Wait for the result comment before acting on the outcome. If Forgejo was
+  down when the job finished, the comment is posted once it's back. Rejected,
   expired or voided jobs did not run.

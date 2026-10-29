@@ -62,11 +62,13 @@ func (d *Daemon) forgejoResult(err error) {
 			d.log.Info("Forgejo is reachable again", "failed_attempts", d.fjFailures)
 		}
 		d.fjFailures, d.fjNext = 0, time.Time{}
+		d.st.Health.ForgejoOK, d.st.Health.ForgejoError, d.st.Health.ForgejoRetryAt = d.Now(), "", time.Time{}
 		return
 	}
 	if !forgejo.Transient(err) {
 		return
 	}
+	d.st.Health.ForgejoError = err.Error()
 	d.fjFailures++
 	delay := d.cfg.Limits.PollInterval.Duration
 	for i := 1; i < d.fjFailures && delay < backoffMax; i++ {
@@ -82,6 +84,7 @@ func (d *Daemon) forgejoResult(err error) {
 		delay = min(he.RetryAfter, retryAfterMax)
 	}
 	d.fjNext = d.Now().Add(delay)
+	d.st.Health.ForgejoRetryAt = d.fjNext
 	if d.fjFailures == 1 {
 		d.log.Warn("Forgejo is failing; backing off", "retry_in", delay.Round(time.Second), "err", err)
 	} else {
