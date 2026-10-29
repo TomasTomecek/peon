@@ -115,7 +115,7 @@ func TestArgsForUserRunInTheirUserManager(t *testing.T) {
 		"--uid=deploy", "--property=WorkingDirectory=~", "--service-type=exec", "--property=RuntimeMaxSec=60",
 		"--setenv=XDG_RUNTIME_DIR=/run/user/1001",
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus",
-		"--property=ExecStopPost=-/usr/bin/systemctl --user stop peon-job-J.service",
+		"--property=ExecStopPost=-/usr/libexec/peon/stop-user-unit peon-job-J.service",
 		"--collect", "--wait", "--pipe", "--",
 		"/usr/bin/systemd-run", "--user", "--quiet", "--unit=peon-job-J.service", "--description=peon job J",
 		"--service-type=exec", "--property=RuntimeMaxSec=60", "--collect", "--wait", "--pipe", "--",
@@ -131,7 +131,8 @@ func TestArgsForUserRunInTheirUserManager(t *testing.T) {
 func TestUserJobNeedsLingering(t *testing.T) {
 	run, ctl, _ := fakeTools(t)
 	linger := t.TempDir()
-	x := &Systemd{SystemdRun: run, Systemctl: ctl, LingerDir: linger,
+	helper := filepath.Join(t.TempDir(), "stop-user-unit")
+	x := &Systemd{SystemdRun: run, Systemctl: ctl, LingerDir: linger, StopHelper: helper,
 		LookupUID: func(name string) (string, error) {
 			if name == "ghost" {
 				return "", errors.New("unknown user")
@@ -147,6 +148,11 @@ func TestUserJobNeedsLingering(t *testing.T) {
 		t.Fatalf("result %+v", res)
 	}
 	os.WriteFile(filepath.Join(linger, "deploy"), nil, 0o644)
+	res = x.Run(context.Background(), Spec{JobID: "U", Command: "true", Timeout: time.Second, User: "deploy"}, func(string) {}, func(string) {})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "missing or not executable") {
+		t.Fatalf("missing helper not detected: %+v", res)
+	}
+	os.WriteFile(helper, []byte("#!/bin/bash\n"), 0o755)
 	// The fake systemd-run runs whatever follows the first "--": here the
 	// inner systemd-run, which the fake PATH does not have. Seeing it be
 	// invoked is enough to know the checks passed.

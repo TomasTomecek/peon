@@ -226,14 +226,16 @@ systemd-run --quiet --unit=peon-job-<id>.service --uid=<user> \
   --property=WorkingDirectory=~ --service-type=exec --property=RuntimeMaxSec=<timeout> \
   --setenv=XDG_RUNTIME_DIR=/run/user/<uid> \
   --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus \
-  --property="ExecStopPost=-/usr/bin/systemctl --user stop peon-job-<id>.service" \
+  --property="ExecStopPost=-/usr/libexec/peon/stop-user-unit peon-job-<id>.service" \
   --collect --wait --pipe -- \
   /usr/bin/systemd-run --user --quiet --unit=peon-job-<id>.service --service-type=exec \
   --property=RuntimeMaxSec=<timeout> --collect --wait --pipe -- \
   /bin/bash --noprofile --norc -c "<command>"
 ```
 
-Stopping the outer system unit (👎, timeout, shutdown) stops the inner user unit through `ExecStopPost`. Exit codes pass through both layers.
+Stopping the outer system unit (👎, timeout, shutdown) stops the inner user unit through its `ExecStopPost=` helper, `/usr/libexec/peon/stop-user-unit`. The helper only stops `peon-job-*` units, and stays silent when the job already finished, because its output becomes part of the job's output. Exit codes pass through both layers.
+
+The helper is a separate program, not `ExecStopPost=/usr/bin/systemctl`, because of SELinux. systemd starts `ExecStopPost=` programs itself. On Fedora and EL, `/usr/bin/systemctl` started that way stays in `init_t`, which may only manage units in its own domain (`allow init_t self:system all_system_perms`). The user's manager therefore denies the stop, and `systemctl` reports only "Access denied". Like other `/usr/libexec` programs, the helper is labeled `bin_t`, so it runs in `unconfined_service_t`, the same domain as the job's `systemd-run`. That domain may manage any domain's units (`allow unconfined_domain_type domain:system all_system_perms`). Each job start checks that the helper exists, so a broken install can't start jobs that could never be stopped.
 
 Requirements and checks:
 

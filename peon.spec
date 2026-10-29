@@ -43,6 +43,7 @@ go build -buildmode=pie \
 
 %install
 install -Dpm0755 %{name} %{buildroot}%{_bindir}/%{name}
+install -Dpm0755 dist/stop-user-unit %{buildroot}%{_libexecdir}/peon/stop-user-unit
 install -Dpm0644 dist/peon.service %{buildroot}%{_unitdir}/peon.service
 install -Dpm0600 dist/config.yaml %{buildroot}%{_sysconfdir}/peon/config.yaml
 install -dm0700 %{buildroot}%{_sharedstatedir}/peon
@@ -61,6 +62,8 @@ install -dm0700 %{buildroot}%{_sharedstatedir}/peon
 %license LICENSE
 %doc README.md SPEC.md
 %{_bindir}/%{name}
+%dir %{_libexecdir}/peon
+%{_libexecdir}/peon/stop-user-unit
 %{_unitdir}/peon.service
 %dir %attr(0700,root,root) %{_sysconfdir}/peon
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/peon/config.yaml
