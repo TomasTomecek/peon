@@ -41,6 +41,10 @@ gofmt -l .            # must print nothing
   a controllable clock. New daemon behaviour gets a scenario test there.
 - Anything that needs real systemd, users or podman goes into a tmt test
   under `tests/`.
+- The RPM build does not run tests. On every PR, Testing Farm runs the
+  whole Go suite, including `-race`, `go vet` and `gofmt` (`tests/unit`),
+  next to the tests against the installed RPM. Test helpers must not assume
+  tools beyond bash and coreutils.
 - `go.mod` says Go 1.22, so don't use newer standard library APIs (for
   example `testing.T.Context`). Fedora and EPEL build with their own Go.
 

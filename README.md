@@ -58,5 +58,6 @@ Contributor and agent guidelines, including the security invariants every
 change must keep, are in [AGENTS.md](AGENTS.md).
 
 Packaging: `peon.spec`, `.packit.yaml`, and `packaging/create-archive.sh`,
-which builds a source tarball with vendored Go modules. Smoke tests in
-`tests/smoke/` run against the installed RPM via tmt on every pull request.
+which builds a source tarball with vendored Go modules. On every pull
+request, Testing Farm runs the Go unit tests (`tests/unit/`) and tests
+against the installed RPM (`tests/smoke/`, `tests/user-manager/`) via tmt.

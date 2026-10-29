@@ -327,7 +327,7 @@ Local state: `/var/lib/peon/state.json`, owned by `peon`, replaced atomically (w
 - Go, a single static binary.
 - `peon.service` with systemd hardening on the daemon: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `ReadWritePaths=/var/lib/peon`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and so on. These apply to the daemon only, not the job units.
 - `peon version` and `peon check-config` subcommands. `check-config` runs as `ExecStartPre`, so a bad config stops the service before it polls anything.
-- Packaged as an RPM (`peon.spec`) for Fedora and EPEL 10. Packit builds it in Copr for every pull request and every commit to `main`, and runs tmt smoke tests against the installed package. The source tarball vendors Go modules so builds are offline.
+- Packaged as an RPM (`peon.spec`) for Fedora and EPEL 10. Packit builds it in Copr for every pull request and every commit to `main`, and Testing Farm runs the Go unit tests and tmt tests against the installed package. The RPM build itself runs no tests. The source tarball vendors Go modules so builds are offline.
 
 ---
 

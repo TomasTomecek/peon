@@ -36,18 +36,25 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-// fakeSystemdRun stands in for systemd-run: it runs the bash command from
-// its arguments directly, and records stop requests.
+// fakeTools stands in for systemd-run and systemctl. The fake systemd-run
+// records its PID and execs the job command from its arguments, so the job
+// keeps that PID; the fake "systemctl stop" kills it with bash's builtin
+// kill. Only bash is needed: build chroots have no pkill.
 func fakeTools(t *testing.T) (run, ctl, stopLog string) {
 	dir := t.TempDir()
 	stopLog = filepath.Join(dir, "stops")
+	pidFile := filepath.Join(dir, "pid")
 	run = filepath.Join(dir, "systemd-run")
 	ctl = filepath.Join(dir, "systemctl")
 	os.WriteFile(run, []byte(`#!/bin/bash
+echo $$ > `+pidFile+`
 while [ "$1" != "--" ]; do shift; done; shift
 exec "$@"
 `), 0o755)
-	os.WriteFile(ctl, []byte("#!/bin/bash\necho \"$@\" >> "+stopLog+"\npkill -f fake-job-marker || true\n"), 0o755)
+	os.WriteFile(ctl, []byte(`#!/bin/bash
+echo "$@" >> `+stopLog+`
+kill -TERM "$(cat `+pidFile+` 2>/dev/null)" 2>/dev/null || true
+`), 0o755)
 	return run, ctl, stopLog
 }
 
@@ -71,7 +78,7 @@ func TestCancelStopsUnit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
-	res := x.Run(ctx, Spec{JobID: "B", Command: "exec -a fake-job-marker sleep 30", Timeout: time.Minute}, func(string) {}, func(string) {})
+	res := x.Run(ctx, Spec{JobID: "B", Command: "exec sleep 30", Timeout: time.Minute}, func(string) {}, func(string) {})
 	if time.Since(start) > 10*time.Second {
 		t.Fatal("cancel did not stop the job")
 	}
@@ -87,7 +94,7 @@ func TestCancelStopsUnit(t *testing.T) {
 func TestWatchdogMarksTimeout(t *testing.T) {
 	run, ctl, _ := fakeTools(t)
 	x := &Systemd{SystemdRun: run, Systemctl: ctl, Grace: 200 * time.Millisecond}
-	res := x.Run(context.Background(), Spec{JobID: "C", Command: "exec -a fake-job-marker sleep 30", Timeout: 300 * time.Millisecond}, func(string) {}, func(string) {})
+	res := x.Run(context.Background(), Spec{JobID: "C", Command: "exec sleep 30", Timeout: 300 * time.Millisecond}, func(string) {}, func(string) {})
 	if !res.TimedOut {
 		t.Fatalf("result %+v", res)
 	}

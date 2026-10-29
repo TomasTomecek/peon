@@ -38,10 +38,6 @@ go build -buildmode=pie \
     -ldflags "-B gobuildid -X main.version=%{version}-%{release}" \
     -o %{name} ./cmd/peon
 
-%check
-export GOFLAGS="-mod=vendor"
-go test ./...
-
 %install
 install -Dpm0755 %{name} %{buildroot}%{_bindir}/%{name}
 install -Dpm0644 dist/peon.service %{buildroot}%{_unitdir}/peon.service
