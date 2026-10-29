@@ -254,6 +254,8 @@ func testConfig() *config.Config {
 	c.Forgejo.BotUserID = botID
 	c.Forgejo.ApproverID = approverID
 	c.Forgejo.RequesterIDs = []int64{agentID, approverID}
+	c.Jobs.DefaultUser = "root"
+	c.Jobs.AllowedUsers = []string{"root", "deploy"}
 	c.Limits.JobTTL.Duration = 30 * time.Minute
 	c.Limits.DefaultTimeout.Duration = 10 * time.Minute
 	c.Limits.MaxTimeout.Duration = time.Hour
