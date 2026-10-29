@@ -1,5 +1,24 @@
 # Operations
 
+## Status
+
+```
+peon status          # what this host is doing
+peon status --json   # the same, for scripts and agents
+```
+
+`peon status` shows the running job, approved jobs waiting to start, cards
+waiting for approval, the last 10 finished jobs, and health:
+
+- when peon last polled;
+- when Forgejo and Loki last worked, the current error, and whether peon is
+  backing off from Forgejo and when it will try next;
+- the audit spool backlog, including corrupt files;
+- comments waiting to be posted.
+
+It only reads, works while the daemon runs, and doesn't need a valid
+config.
+
 ## Logs
 
 ```
@@ -17,7 +36,7 @@ voided jobs. Warnings say what will be retried.
 |---|---|
 | `/etc/peon/config.yaml` | configuration (`root:root 0600`) |
 | `/etc/peon/forgejo.token`, `/etc/peon/loki.password` | secrets (`0600`) |
-| `/var/lib/peon/state.json` | jobs, comment cursors, handled comments |
+| `/var/lib/peon/state.json` | jobs, comment cursors, handled comments, comments waiting to post, health |
 | `/var/lib/peon/state.json.lock` | prevents two peon processes sharing the state |
 | `/var/lib/peon/spool/` | audit records waiting for Loki |
 
@@ -42,9 +61,21 @@ jobs, watch `/var/lib/peon/spool/`.
 
 ## Forgejo outages
 
-peon keeps retrying. Waiting cards are re-checked once Forgejo is back,
-and expire normally. A result or status comment that fails to post is not
-retried, but the outcome is always in Loki and the daemon log.
+peon backs off: after a failure it waits `poll_interval`, then twice as
+long each time, up to 5 minutes, or longer if Forgejo sends `Retry-After`.
+It logs one warning when backoff starts and one line when Forgejo is back.
+Meanwhile the audit spool still flushes and already-approved jobs still
+start. Waiting cards are re-checked once Forgejo is back, and expire
+normally.
+
+Result and status comments are never lost to an outage. They're saved in
+`state.json` first, then posted in order and retried for up to 24 hours,
+surviving restarts. Comments Forgejo refuses outright (a locked or deleted
+issue) are dropped at once so they can't hold up later ones. A rejected
+token (401) is treated as an outage, so comments wait until it works again.
+Delayed and dropped comments are recorded in Loki (`comment_posted`,
+`comment_dropped`). A crash at exactly the wrong moment can post a comment
+twice, but never loses it. `peon status` shows how many are waiting.
 
 ## Upgrades and restarts
 
@@ -52,7 +83,7 @@ The RPM never restarts peon on upgrade, because a restart could interrupt
 a running job. After upgrading, restart it when no job is running:
 
 ```
-journalctl -u peon -n 20      # check nothing is running
+peon status                   # check nothing is running
 systemctl restart peon
 ```
 
@@ -89,6 +120,10 @@ the peon version and Forgejo version.
 
 **A `--user` job fails with "no lingering systemd user manager".** Run
 `loginctl enable-linger <user>` on that host.
+
+**Results are slow to appear in the issue.** Check `peon status`: if
+comments are waiting, Forgejo is failing and peon is backing off. They'll
+be posted once it's back.
 
 **No job card appears.**
 - Check the comment is from an account in `requester_ids`; others get a

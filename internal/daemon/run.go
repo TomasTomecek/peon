@@ -59,6 +59,7 @@ func (d *Daemon) event(ctx context.Context, j *job.Job, name string, extra map[s
 	line, _ := json.Marshal(rec)
 	entries := []loki.Entry{{Labels: d.labels(j, name), Time: d.Now(), Line: string(line)}}
 	err := d.audit.Push(ctx, entries)
+	d.lokiResult(err)
 	if err == nil || sync {
 		return err
 	}
@@ -295,4 +296,13 @@ func (d *Daemon) Recover(ctx context.Context) {
 		d.post(ctx, j, "result", body)
 		d.log.Warn("recovered interrupted job", "job", j.Record.JobID)
 	}
+}
+
+// lokiResult records Loki's health for "peon status".
+func (d *Daemon) lokiResult(err error) {
+	if err != nil {
+		d.st.Health.LokiError = err.Error()
+		return
+	}
+	d.st.Health.LokiOK, d.st.Health.LokiError = d.Now(), ""
 }

@@ -12,7 +12,7 @@ and §2 is the threat model.
 
 | Path | What it is |
 |---|---|
-| `cmd/peon` | CLI: `version`, `check-config`, `run` |
+| `cmd/peon` | CLI: `version`, `check-config`, `status`, `run` |
 | `internal/command` | Parses `/run` comments and validates commands |
 | `internal/job` | Job record, hash, state machine, rendered comments, approval rules |
 | `internal/daemon` | The poll loop: proposals, approval, queue, execution, audit |
@@ -20,6 +20,7 @@ and §2 is the threat model.
 | `internal/forgejo` | Minimal Forgejo REST client |
 | `internal/loki` | Loki push client and on-disk spool |
 | `internal/state` | Atomic, locked JSON state file |
+| `internal/status` | The read-only report behind `peon status` |
 | `internal/config` | Strict YAML config loading and validation |
 | `dist/` | systemd unit and example config, installed by the RPM |
 | `peon.spec`, `.packit.yaml`, `packaging/` | RPM packaging and Packit/Copr builds |

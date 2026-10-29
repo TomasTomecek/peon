@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/TomasTomecek/peon/internal/config"
 	"github.com/TomasTomecek/peon/internal/daemon"
@@ -19,6 +21,7 @@ import (
 	"github.com/TomasTomecek/peon/internal/forgejo"
 	"github.com/TomasTomecek/peon/internal/loki"
 	"github.com/TomasTomecek/peon/internal/state"
+	"github.com/TomasTomecek/peon/internal/status"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -28,9 +31,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage: peon [--config PATH] <command>
 
 Commands:
-  version        print the version
-  check-config   validate the configuration file and secret files
-  run            run the daemon
+  version          print the version
+  check-config     validate the configuration file and secret files
+  status [--json]  show running, queued and waiting jobs, and health
+  run              run the daemon
 
 Options:
 `)
@@ -43,7 +47,7 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	if flag.NArg() != 1 {
+	if flag.NArg() != 1 && !(flag.NArg() == 2 && flag.Arg(0) == "status" && flag.Arg(1) == "--json") {
 		usage()
 		os.Exit(2)
 	}
@@ -63,6 +67,27 @@ func main() {
 		fmt.Printf("%s: OK (host %s, %d repo(s), approver %d, jobs as %s, default %s)\n",
 			*cfgPath, c.Host, len(c.Forgejo.Repos), c.Forgejo.ApproverID,
 			strings.Join(c.Jobs.AllowedUsers, "/"), c.Jobs.DefaultUser)
+	case "status":
+		// Best effort: the host name is nice to show but not required.
+		host := ""
+		if c, err := config.Load(*cfgPath); err == nil {
+			host = c.Host
+		}
+		r, err := status.Collect(*stateDir, host, time.Now().UTC())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "peon: %v\n", err)
+			os.Exit(1)
+		}
+		if flag.NArg() == 2 {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(r); err != nil {
+				fmt.Fprintf(os.Stderr, "peon: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		fmt.Print(r.Text())
 	case "run":
 		c, err := config.Load(*cfgPath)
 		if err == nil {

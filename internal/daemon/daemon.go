@@ -103,6 +103,7 @@ func (d *Daemon) Tick(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.st.Health.LastPoll = d.Now()
 	d.flushSpool(ctx)
 	// While Forgejo is failing, skip it but keep doing local work at the
 	// normal cadence: flushing the audit spool and starting approved jobs.
@@ -141,6 +142,7 @@ func (d *Daemon) flushSpool(ctx context.Context) {
 		return
 	}
 	n, err := d.spool.Flush(ctx, d.audit)
+	d.lokiResult(err)
 	if err != nil {
 		d.log.Warn("Loki still unreachable, audit records stay spooled", "sent", n, "pending", d.spool.Pending(), "err", err)
 		return
