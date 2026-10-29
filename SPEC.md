@@ -97,13 +97,13 @@ When a valid `/run` is seen, the daemon creates a job in local state:
   "requester_id": 7,
   "requester": "agent-ops",
   "command": "systemctl restart postgresql",
-  "flags": { "private": false, "timeout": "10m" },
+  "flags": { "private": false, "timeout": "10m0s" },
   "created_at": "2026-10-29T10:00:00Z",
   "expires_at": "2026-10-29T10:30:00Z"
 }
 ```
 
-`job_hash = sha256(canonical_json(job_record))`. Canonical JSON uses sorted keys, no whitespace, and UTF-8.
+`job_hash = sha256(canonical_json(job_record))`. Canonical JSON uses sorted keys, no whitespace, and UTF-8; times are RFC 3339 UTC with second precision, and the timeout is a Go duration string (`10m0s`).
 
 ### 5.2 Bot comment
 
@@ -124,7 +124,9 @@ hash `3f9a…c21e` (first 12 shown)
 👍 to approve · 👎 to reject
 ````
 
-The daemon stores the exact bytes of the comment body it posted, and the comment ID.
+The command block uses a backtick fence longer than any backtick run in the command, so a command containing ```` ``` ```` cannot close the block early and make text outside it look like part of the card.
+
+The daemon stores the comment ID, the body and `updated_at` exactly as Forgejo returned them on creation. If the returned body differs from what peon sent, the job is voided as `tampered` immediately.
 
 ### 5.3 Command validation
 
@@ -151,12 +153,12 @@ The daemon polls reactions on the open job's bot comment. A job is approved only
 1. A 👍 (`+1`) reaction exists from `approver_id`.
 2. No 👎 (`-1`) reaction from `approver_id` exists.
 3. The bot comment's current body matches the stored bytes exactly.
-4. The bot comment was never edited (`updated_at == created_at`; see open question Q1).
-5. The comment author is the bot user ID, and the job ID on the card exists in local state.
+4. The bot comment's `updated_at` still equals the value Forgejo returned when it was posted. An edit that restores the original text is still caught (see open question Q1).
+5. The comment author is the bot user ID. Daemons only ever look at cards of jobs in their own local state.
 6. `now < expires_at`.
 7. The job state is `proposed` (single-use).
 
-If check 3 or 4 fails, the job becomes `tampered`, which is terminal. The bot posts a warning, and the agent must propose again.
+If check 3, 4 or 5 fails, or the card was deleted, the job becomes `tampered`, which is terminal. The bot posts a warning, and the agent must propose again. Integrity is checked before anything else, then 👎, then expiry, then 👍.
 
 A 👎 from the approver moves the job to `rejected` (terminal).
 
@@ -169,32 +171,38 @@ A 👎 from the approver moves the job to `rejected` (terminal).
 ### 7.1 Privilege separation
 
 - `peon.service` runs as an unprivileged user `peon`.
-- A polkit rule allows user `peon` to start and stop transient units whose names start with `peon-job-`, and nothing else (see open question Q2).
+- A polkit rule allows user `peon` to start and stop units named `peon-job-<ULID>.service`, and nothing else. This relies on systemd passing the unit name to polkit for transient units, which it does since **systemd 257** (Fedora 43+, EL10); the RPM requires it.
 - Jobs run as root in a transient unit:
 
 ```
-systemd-run \
-  --unit=peon-job-<job_id> \
+systemd-run --quiet \
+  --unit=peon-job-<job_id>.service \
+  --description="peon job <job_id>" \
   --uid=root \
   --working-directory=/ \
+  --service-type=exec \
   --property=RuntimeMaxSec=<timeout> \
-  --property=StandardInput=null \
   --collect --wait --pipe \
-  /bin/bash --noprofile --norc -c "<command>"
+  -- /bin/bash --noprofile --norc -c "<command>"
 ```
 
+- The command is a single argv element; peon never interpolates it into a shell itself. stdin is `/dev/null`.
 - The environment is clean (systemd default). No agent-controlled environment variables.
-- **One job at a time per host.** Approved jobs queue in FIFO order.
+- **One job at a time per host.** Approved jobs queue in approval order (request order within one poll).
+- An approval is for running the job soon: a job that has not **started** by `expires_at`, for example because a long job was running, expires instead.
+- The job is marked `running` **on disk** before the command starts. If that write fails, it does not start.
 
 ### 7.2 Cancellation
 
 - 👎 from the approver on a **running** job triggers `systemctl stop peon-job-<job_id>`. The state becomes `killed`.
-- A timeout also produces `timed_out`.
+- A timeout also produces `timed_out`. systemd-run does not say why a unit ended, so a non-zero exit at or past the timeout counts as a timeout. peon also stops the unit itself 30 s past the timeout, in case `RuntimeMaxSec` did not fire.
+- If peon is stopped while a job runs, it stops the job and reports it `interrupted`.
+- If peon finds a job still `running` in its state at startup (it crashed), it stops the unit, reports the job `interrupted`, and **never runs it again**.
 
 ### 7.3 Job states
 
 ```
-proposed ──👍──▶ approved ──▶ running ──▶ succeeded | failed | timed_out | killed
+proposed ──👍──▶ approved ──▶ running ──▶ succeeded | failed | timed_out | killed | interrupted
    │
    ├──👎──▶ rejected
    ├──time──▶ expired
@@ -211,11 +219,11 @@ All terminal states are final. A job ID can never return to `proposed`.
 
 - Pushed via `/loki/api/v1/push` using a **push-only** credential.
 - Stream labels: `job="peon"`, `host`, `job_id`, `repo`, `issue`, `requester`, `approver`, `event`.
-- Events: `proposed`, `approved`, `rejected`, `expired`, `tampered`, `started`, `stdout`, `stderr`, `finished`.
-- Each event line is JSON and includes `job_hash` and the full command (on `proposed` and `started`).
-- **Fail closed:** if the `approved` and `started` push does not succeed, the job does not run. The daemon retries until expiry, then marks the job `expired`.
+- Events: `proposed`, `approved`, `rejected`, `expired`, `tampered`, `started`, `kill_requested`, `stdout`, `stderr`, `finished`.
+- Lifecycle event lines are JSON and include `job_hash`, the state, the requester, the approver, and the full command (on `proposed` and `started`). `stdout` / `stderr` lines are the raw output lines (capped at 64 KB each).
+- **Fail closed:** the job is not approved until the `approved` record is in Loki, and does not start until the `started` record is. The daemon retries every poll; if Loki is still down at the job's expiry, the job becomes `expired`. Other events are spooled when Loki is down.
 - If a push fails **during** a run, the job is not killed. Lines spool to `/var/lib/peon/spool/` and are retried in order.
-- A local copy is also written to journald.
+- The daemon also logs every transition to journald.
 
 ### 8.2 Result comment
 
@@ -224,7 +232,7 @@ Posted by the bot when the job finishes:
 - Status, exit code, duration.
 - Last `output_tail_lines` lines (default 50, max 4 KB) of combined output, unless `--private`.
 - With `--private`: only status and exit code, plus a note that the output is in Loki only.
-- A Grafana Explore link filtered by `job_id`.
+- A Grafana Explore link and the LogQL query `{job="peon", job_id="<id>"}`. With `grafana.loki_datasource_uid` set, the link opens the job's logs directly.
 
 ---
 
@@ -233,7 +241,9 @@ Posted by the bot when the job finishes:
 - Poll new comments on watched repos with `GET /repos/{owner}/{repo}/issues/comments?since=<cursor>`.
 - Poll reactions on open jobs with `GET /repos/{owner}/{repo}/issues/comments/{id}/reactions`.
 - Default interval: 10 s, with jitter.
-- The cursor is persisted in local state.
+- The cursor is persisted in local state and only ever holds Forgejo's own timestamps, so clock differences between peon and Forgejo cannot make it skip comments. On the very first start for a repo, peon reads the last 30 days and marks existing `/run` comments as handled: old requests are never acted on.
+- Each `/run` comment for this host is handled once, by comment ID: it becomes a job or gets one error reply. Editing it later does nothing.
+- Daemons ignore `/run` comments for other hosts entirely, including malformed ones, so only the named host ever replies.
 
 ---
 
@@ -271,9 +281,10 @@ loki:
 
 grafana:
   explore_url: https://grafana.internal/explore
+  loki_datasource_uid: P8E80F9AEF21F6940   # optional
 ```
 
-Local state: SQLite at `/var/lib/peon/peon.db`, owned by `peon`, with a unique `job_id` and state transitions enforced in transactions.
+Local state: `/var/lib/peon/state.json`, owned by `peon`, replaced atomically (write, fsync, rename, fsync directory) on every change, and locked with `flock` so two daemons can never share it. A state file peon cannot parse stops it from starting. Loki spool: `/var/lib/peon/spool/`. Finished jobs are kept for 30 days.
 
 ---
 
@@ -289,6 +300,6 @@ Local state: SQLite at `/var/lib/peon/peon.db`, owned by `peon`, with a unique `
 ## 12. Open questions
 
 - **Q1.** Does adding a reaction change a comment's `updated_at` in Forgejo? If it does, check 4 needs another approach, such as Forgejo's comment content-history, or relying on body comparison alone.
-- **Q2.** Verify the polkit rule can match on transient unit names for `StartTransientUnit` (`action.lookup("unit")`). The shipped rule (`dist/50-peon.rules`) fails closed if it can't. Either way, the `peon` user is root-equivalent, because it chooses the command a root unit runs. If that matters, the stronger design is a split: a tiny root helper that verifies the approval itself (re-reading the Forgejo comment and reactions with its own read-only token) before running anything, so a compromised daemon cannot run unapproved commands.
+- **Q2.** ~~Can the polkit rule match transient unit names?~~ **Resolved:** systemd ≥ 257 passes `unit` and `verb=start` for `StartTransientUnit` (older releases pass no details, so the rule denies everything there). Still, the `peon` user is root-equivalent, because it chooses the command a root unit runs. If that matters, the stronger design is a split: a tiny root helper that verifies the approval itself (re-reading the Forgejo comment and reactions with its own read-only token) before running anything, so a compromised daemon cannot run unapproved commands.
 - **Q3.** Should the operator be able to edit a command before approving (for example, reply `/amend` with a new block), or must the agent always re-propose? Current answer: re-propose. Simpler and safer.
 - **Q4.** Loki tenancy: one tenant for all peons, or per host?

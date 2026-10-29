@@ -32,3 +32,5 @@ loki:
 
 grafana:
   explore_url: https://grafana.internal/explore
+  # Optional: UID of the Loki datasource, for direct links to a job's logs.
+  # loki_datasource_uid: P8E80F9AEF21F6940

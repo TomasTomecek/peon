@@ -18,7 +18,9 @@ ExclusiveArch:  %{?golang_arches}%{!?golang_arches:x86_64 aarch64 ppc64le s390x 
 BuildRequires:  golang >= 1.22
 BuildRequires:  systemd-rpm-macros
 Requires:       polkit
-Requires:       systemd
+# systemd 257 is the first release that tells polkit the unit name for
+# transient units; dist/50-peon.rules depends on it.
+Requires:       systemd >= 257
 Requires(pre):  shadow-utils
 %{?systemd_requires}
 
