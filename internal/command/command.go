@@ -16,7 +16,9 @@ var ErrNotRun = errors.New("not a /run comment")
 
 // Request is a parsed /run comment.
 type Request struct {
-	Host    string
+	Host string
+	// User is empty when the requester did not set --user.
+	User    string
 	Private bool
 	// Timeout is zero when the requester did not set --timeout.
 	Timeout time.Duration
@@ -25,6 +27,7 @@ type Request struct {
 
 var (
 	hostRe  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	userRe  = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	fenceRe = regexp.MustCompile("^(`{3,})([A-Za-z]*)[ \t]*$")
 )
 
@@ -56,6 +59,15 @@ func Parse(body string) (req Request, err error) {
 				return req, errors.New("--private given twice")
 			}
 			req.Private = true
+		case strings.HasPrefix(f, "--user="):
+			if req.User != "" {
+				return req, errors.New("--user given twice")
+			}
+			u := strings.TrimPrefix(f, "--user=")
+			if !userRe.MatchString(u) {
+				return req, fmt.Errorf("invalid %s: not a valid user name", f)
+			}
+			req.User = u
 		case strings.HasPrefix(f, "--timeout="):
 			if req.Timeout != 0 {
 				return req, errors.New("--timeout given twice")
@@ -66,7 +78,7 @@ func Parse(body string) (req Request, err error) {
 			}
 			req.Timeout = d
 		default:
-			return req, fmt.Errorf("unknown flag %q (allowed: --private, --timeout=<duration>)", f)
+			return req, fmt.Errorf("unknown flag %q (allowed: --user=<name>, --private, --timeout=<duration>)", f)
 		}
 	}
 

@@ -61,7 +61,11 @@ func RenderCard(j *Job) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🪓 **peon job** `%s` on **%s**\n\n", r.JobID, r.Host)
 	fmt.Fprintf(&b, "Requested by @%s in comment #%d\n", r.Requester, r.SourceCommentID)
-	fmt.Fprintf(&b, "Runs as **root** · timeout **%s** · output %s\n", r.Timeout, output)
+	runsAs := "Runs as **" + r.User + "**"
+	if r.User != "root" {
+		runsAs += " (in their systemd user manager)"
+	}
+	fmt.Fprintf(&b, "%s · timeout **%s** · output %s\n", runsAs, r.Timeout, output)
 	fmt.Fprintf(&b, "Expires **%s**\n\n", r.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"))
 	if len(j.Warnings) > 0 {
 		b.WriteString("⚠️ **Read carefully:**\n")

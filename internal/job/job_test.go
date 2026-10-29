@@ -15,7 +15,7 @@ var t0 = time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
 func record() Record {
 	return Record{
 		JobID: "01JBQ3Y8Z4K7M2N5P6R8S9T0VW", Host: "db1", Repo: "ops/infra", Issue: 42,
-		SourceCommentID: 1234, RequesterID: 7, Requester: "agent-ops",
+		SourceCommentID: 1234, RequesterID: 7, Requester: "agent-ops", User: "root",
 		Command: "systemctl restart postgresql", Timeout: 10 * time.Minute,
 		CreatedAt: t0, ExpiresAt: t0.Add(30 * time.Minute),
 	}
@@ -46,7 +46,7 @@ func TestCanonicalIsStableAndSorted(t *testing.T) {
 	want := `{"command":"systemctl restart postgresql","created_at":"2026-10-29T10:00:00Z",` +
 		`"expires_at":"2026-10-29T10:30:00Z","flags":{"private":false,"timeout":"10m0s"},` +
 		`"host":"db1","issue":42,"job_id":"01JBQ3Y8Z4K7M2N5P6R8S9T0VW","repo":"ops/infra",` +
-		`"requester":"agent-ops","requester_id":7,"source_comment_id":1234}`
+		`"requester":"agent-ops","requester_id":7,"source_comment_id":1234,"user":"root"}`
 	if got := string(record().Canonical()); got != want {
 		t.Fatalf("canonical JSON changed:\n got %s\nwant %s", got, want)
 	}
@@ -69,6 +69,7 @@ func TestHashCoversEveryField(t *testing.T) {
 		"req id":    func(r *Record) { r.RequesterID = 8 },
 		"requester": func(r *Record) { r.Requester = "agent-x" },
 		"command":   func(r *Record) { r.Command += " " },
+		"user":      func(r *Record) { r.User = "postgres" },
 		"private":   func(r *Record) { r.Private = true },
 		"timeout":   func(r *Record) { r.Timeout = time.Hour },
 		"created":   func(r *Record) { r.CreatedAt = r.CreatedAt.Add(time.Second) },
@@ -117,7 +118,7 @@ func TestCardContents(t *testing.T) {
 	j := &Job{Record: record(), Warnings: []string{"uses eval"}}
 	j.Hash = j.Record.Hash()
 	card := RenderCard(j)
-	for _, want := range []string{"`01JBQ3Y8Z4K7M2N5P6R8S9T0VW`", "**db1**", "@agent-ops", "comment #1234",
+	for _, want := range []string{"`01JBQ3Y8Z4K7M2N5P6R8S9T0VW`", "**db1**", "@agent-ops", "comment #1234", "Runs as **root** ·",
 		"timeout **10m0s**", "posted to this issue", "2026-10-29 10:30 UTC", "- uses eval",
 		"```sh\nsystemctl restart postgresql\n```", "hash `" + j.Hash[:12] + "`", "👍 to approve"} {
 		if !strings.Contains(card, want) {
@@ -127,6 +128,10 @@ func TestCardContents(t *testing.T) {
 	j.Record.Private = true
 	if !strings.Contains(RenderCard(j), "Loki only") {
 		t.Error("private card does not say output is Loki only")
+	}
+	j.Record.User = "postgres"
+	if !strings.Contains(RenderCard(j), "Runs as **postgres** (in their systemd user manager)") {
+		t.Errorf("card does not show the user:\n%s", RenderCard(j))
 	}
 }
 

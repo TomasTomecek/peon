@@ -16,6 +16,14 @@ forgejo:
   approver_id: 0        # your account
   requester_ids: []     # agent accounts allowed to propose jobs
 
+# Who jobs may run as. Agents pick one with "/run <host> --user=<name>".
+# Non-root users run in their own systemd user manager (rootless podman,
+# systemctl --user) and need lingering: loginctl enable-linger <name>
+jobs:
+  default_user: root
+  allowed_users:
+    - root
+
 # Durations are strings such as 30m, 2h or 10s. Bare numbers are rejected.
 limits:
   job_ttl: 30m

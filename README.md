@@ -14,6 +14,9 @@ systemctl restart postgresql
 ```
 ````
 
+Add `--user=deploy` to run in that user's systemd user manager instead of
+as root (for rootless podman and `systemctl --user`).
+
 peon on `db1` replies with a job card showing the exact command and its
 hash. You react 👍 on that card from your phone; peon runs the command as
 root in a transient systemd unit, ships the output to Loki, and posts the

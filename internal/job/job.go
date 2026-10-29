@@ -38,18 +38,20 @@ func (s State) Terminal() bool {
 // Record is everything the approval covers. It never changes after the
 // job card is posted; the command peon executes is Record.Command.
 type Record struct {
-	JobID           string        `json:"job_id"`
-	Host            string        `json:"host"`
-	Repo            string        `json:"repo"`
-	Issue           int64         `json:"issue"`
-	SourceCommentID int64         `json:"source_comment_id"`
-	RequesterID     int64         `json:"requester_id"`
-	Requester       string        `json:"requester"`
-	Command         string        `json:"command"`
-	Private         bool          `json:"private"`
-	Timeout         time.Duration `json:"timeout"`
-	CreatedAt       time.Time     `json:"created_at"`
-	ExpiresAt       time.Time     `json:"expires_at"`
+	JobID           string `json:"job_id"`
+	Host            string `json:"host"`
+	Repo            string `json:"repo"`
+	Issue           int64  `json:"issue"`
+	SourceCommentID int64  `json:"source_comment_id"`
+	RequesterID     int64  `json:"requester_id"`
+	Requester       string `json:"requester"`
+	// User is who the command runs as.
+	User      string        `json:"user"`
+	Command   string        `json:"command"`
+	Private   bool          `json:"private"`
+	Timeout   time.Duration `json:"timeout"`
+	CreatedAt time.Time     `json:"created_at"`
+	ExpiresAt time.Time     `json:"expires_at"`
 }
 
 // Canonical returns the canonical JSON of the record: an object with
@@ -64,6 +66,7 @@ func (r Record) Canonical() []byte {
 		"source_comment_id": r.SourceCommentID,
 		"requester_id":      r.RequesterID,
 		"requester":         r.Requester,
+		"user":              r.User,
 		"command":           r.Command,
 		"flags": map[string]any{
 			"private": r.Private,

@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +21,8 @@ type Spec struct {
 	JobID   string
 	Command string
 	Timeout time.Duration
+	// User runs the job; empty means root.
+	User string
 }
 
 type Result struct {
@@ -43,6 +48,11 @@ func UnitName(jobID string) string { return "peon-job-" + jobID + ".service" }
 type Systemd struct {
 	SystemdRun string // default "systemd-run"
 	Systemctl  string // default "systemctl"
+	// LookupUID resolves a user name to a UID. Default: os/user.
+	LookupUID func(name string) (string, error)
+	// LingerDir is where logind marks lingering users. Default:
+	// /var/lib/systemd/linger.
+	LingerDir string
 	// Grace is how long past the timeout peon waits before stopping the
 	// unit itself, in case RuntimeMaxSec did not fire.
 	Grace time.Duration
@@ -58,29 +68,99 @@ func (x *Systemd) bin(p, def string) string {
 // Args returns the systemd-run arguments for a job. The command is passed
 // as a single argv element to bash; nothing is interpolated into a shell
 // by peon.
-func (x *Systemd) Args(s Spec) []string {
+//
+// Root jobs run in a system unit. Jobs for another user run in that
+// user's own systemd user manager, so they get the user's real session
+// environment (XDG_RUNTIME_DIR, the user bus, cgroup delegation), which
+// rootless podman and systemctl --user need. To get there without extra
+// privileges, a system unit running as the user starts the command with
+// "systemd-run --user"; stopping the system unit (cancel, timeout) stops
+// the inner unit through ExecStopPost.
+func (x *Systemd) Args(s Spec, uid string) []string {
 	secs := int64(s.Timeout / time.Second)
 	if secs < 1 {
 		secs = 1
 	}
-	return []string{
-		"--quiet",
-		"--unit=" + UnitName(s.JobID),
-		"--description=peon job " + s.JobID,
-		"--uid=root",
-		"--working-directory=/",
-		"--service-type=exec",
-		"--property=RuntimeMaxSec=" + strconv.FormatInt(secs, 10),
-		"--collect",
-		"--wait",
-		"--pipe",
-		"--",
-		"/bin/bash", "--noprofile", "--norc", "-c", s.Command,
+	runtime := "--property=RuntimeMaxSec=" + strconv.FormatInt(secs, 10)
+	unit := UnitName(s.JobID)
+	shell := []string{"/bin/bash", "--noprofile", "--norc", "-c", s.Command}
+	if s.User == "" || s.User == "root" {
+		return append([]string{
+			"--quiet",
+			"--unit=" + unit,
+			"--description=peon job " + s.JobID,
+			"--uid=root",
+			"--working-directory=/",
+			"--service-type=exec",
+			runtime,
+			"--collect", "--wait", "--pipe",
+			"--",
+		}, shell...)
 	}
+	rundir := "/run/user/" + uid
+	outer := []string{
+		"--quiet",
+		"--unit=" + unit,
+		"--description=peon job " + s.JobID + " (as " + s.User + ")",
+		"--uid=" + s.User,
+		"--property=WorkingDirectory=~",
+		"--service-type=exec",
+		runtime,
+		"--setenv=XDG_RUNTIME_DIR=" + rundir,
+		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=" + rundir + "/bus",
+		"--property=ExecStopPost=-/usr/bin/systemctl --user stop " + unit,
+		"--collect", "--wait", "--pipe",
+		"--",
+	}
+	inner := []string{
+		"/usr/bin/systemd-run", "--user",
+		"--quiet",
+		"--unit=" + unit,
+		"--description=peon job " + s.JobID,
+		"--service-type=exec",
+		runtime,
+		"--collect", "--wait", "--pipe",
+		"--",
+	}
+	return append(append(outer, inner...), shell...)
+}
+
+// prepare resolves the user's UID and checks that their user manager
+// runs without a login (lingering).
+func (x *Systemd) prepare(s Spec) (string, error) {
+	if s.User == "" || s.User == "root" {
+		return "0", nil
+	}
+	lookup := x.LookupUID
+	if lookup == nil {
+		lookup = func(name string) (string, error) {
+			u, err := user.Lookup(name)
+			if err != nil {
+				return "", err
+			}
+			return u.Uid, nil
+		}
+	}
+	uid, err := lookup(s.User)
+	if err != nil {
+		return "", fmt.Errorf("user %q: %w", s.User, err)
+	}
+	dir := x.LingerDir
+	if dir == "" {
+		dir = "/var/lib/systemd/linger"
+	}
+	if _, err := os.Stat(filepath.Join(dir, s.User)); err != nil {
+		return "", fmt.Errorf("user %q has no lingering systemd user manager (loginctl enable-linger %s)", s.User, s.User)
+	}
+	return uid, nil
 }
 
 func (x *Systemd) Run(ctx context.Context, s Spec, stdout, stderr func(string)) Result {
-	cmd := exec.Command(x.bin(x.SystemdRun, "systemd-run"), x.Args(s)...)
+	uid, err := x.prepare(s)
+	if err != nil {
+		return Result{ExitCode: -1, Err: err}
+	}
+	cmd := exec.Command(x.bin(x.SystemdRun, "systemd-run"), x.Args(s, uid)...)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 	outPipe, err := cmd.StdoutPipe()
 	if err != nil {
