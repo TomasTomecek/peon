@@ -47,7 +47,7 @@ type fakeForgejo struct {
 	nextID    int64
 	comments  map[int64]*forgejo.Comment
 	reactions map[int64][]forgejo.Reaction
-	failPost  bool
+	postErr   error
 	// skew is how far Forgejo's clock is behind peon's.
 	skew time.Duration
 }
@@ -132,9 +132,14 @@ func (f *fakeForgejo) ListCommentReactions(_ context.Context, _ string, id int64
 	return append([]forgejo.Reaction(nil), f.reactions[id]...), nil
 }
 
+func (f *fakeForgejo) setPostErr(err error) { f.mu.Lock(); f.postErr = err; f.mu.Unlock() }
+
 func (f *fakeForgejo) CreateComment(_ context.Context, _ string, iss int64, body string) (forgejo.Comment, error) {
-	if f.failPost {
-		return forgejo.Comment{}, errors.New("forgejo down")
+	f.mu.Lock()
+	postErr := f.postErr
+	f.mu.Unlock()
+	if postErr != nil {
+		return forgejo.Comment{}, postErr
 	}
 	if iss != issue {
 		return forgejo.Comment{}, fmt.Errorf("unexpected issue %d", iss)

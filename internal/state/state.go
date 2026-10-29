@@ -27,6 +27,22 @@ type Data struct {
 	// job or answered with an error, so they are never handled twice.
 	Handled map[int64]time.Time `json:"handled"`
 	Jobs    map[string]*job.Job `json:"jobs"`
+	// Outbox holds comments peon still has to post, oldest first.
+	Outbox []*Outgoing `json:"outbox,omitempty"`
+}
+
+// Outgoing is a comment waiting to be posted to Forgejo.
+type Outgoing struct {
+	Key         string    `json:"key"` // job ID and kind; unique
+	JobID       string    `json:"job_id"`
+	Kind        string    `json:"kind"`
+	Repo        string    `json:"repo"`
+	Issue       int64     `json:"issue"`
+	Body        string    `json:"body"`
+	QueuedAt    time.Time `json:"queued_at"`
+	Attempts    int       `json:"attempts"`
+	NextAttempt time.Time `json:"next_attempt"`
+	LastError   string    `json:"last_error,omitempty"`
 }
 
 type Store struct {

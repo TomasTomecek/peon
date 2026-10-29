@@ -99,6 +99,7 @@ func (d *Daemon) Tick(ctx context.Context) {
 	defer d.mu.Unlock()
 
 	d.flushSpool(ctx)
+	d.flushOutbox(ctx)
 	for _, repo := range d.cfg.Forgejo.Repos {
 		if err := d.scan(ctx, repo); err != nil {
 			d.log.Warn("scanning comments failed", "repo", repo, "err", err)
@@ -331,9 +332,7 @@ func (d *Daemon) finishUnrun(ctx context.Context, j *job.Job, s job.State, reaso
 	j.State, j.Reason, j.FinishedAt = s, reason, d.Now()
 	d.save()
 	d.event(ctx, j, string(s), map[string]any{"reason": reason}, false)
-	if _, err := d.fj.CreateComment(ctx, j.Record.Repo, j.Record.Issue, render(j)); err != nil {
-		d.log.Warn("posting job status failed", "job", j.Record.JobID, "err", err)
-	}
+	d.post(ctx, j, string(s), render(j))
 	d.log.Info("job ended without running", "job", j.Record.JobID, "state", s, "reason", reason)
 }
 
