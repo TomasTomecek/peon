@@ -69,6 +69,10 @@ type Loki struct {
 
 type Grafana struct {
 	ExploreURL string `yaml:"explore_url"`
+	// LokiDatasourceUID makes result links open the job's logs directly.
+	// Optional; without it the link opens Explore and the comment shows
+	// the LogQL query.
+	LokiDatasourceUID string `yaml:"loki_datasource_uid"`
 }
 
 var (

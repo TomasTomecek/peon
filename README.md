@@ -23,9 +23,10 @@ The full design and threat model are in [SPEC.md](SPEC.md).
 
 ## Status
 
-Early. Implemented: configuration loading and validation, `peon version`,
-`peon check-config`, systemd unit, polkit rule, RPM packaging.
-Not yet implemented: the daemon loop (`peon run` exits with an error).
+Early, but complete end to end: `peon run` watches Forgejo, posts job
+cards, applies the approval rules, runs approved jobs in transient systemd
+units and audits everything in Loki. Not yet tried against a real Forgejo
+instance. Requires systemd 257 or newer (Fedora 43+, EL10).
 
 ## Install
 

@@ -1,0 +1,101 @@
+package executor
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestArgsPassCommandAsOneArgument(t *testing.T) {
+	x := &Systemd{}
+	cmd := `echo "$HOME"; rm -rf "/tmp/x y" && false`
+	args := x.Args(Spec{JobID: "01JBQ3Y8Z4K7M2N5P6R8S9T0VW", Command: cmd, Timeout: 90 * time.Second})
+	want := []string{"--quiet", "--unit=peon-job-01JBQ3Y8Z4K7M2N5P6R8S9T0VW.service",
+		"--description=peon job 01JBQ3Y8Z4K7M2N5P6R8S9T0VW", "--uid=root", "--working-directory=/",
+		"--service-type=exec", "--property=RuntimeMaxSec=90", "--collect", "--wait", "--pipe", "--",
+		"/bin/bash", "--noprofile", "--norc", "-c", cmd}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args =\n%q\nwant\n%q", args, want)
+	}
+}
+
+func TestSplitLines(t *testing.T) {
+	var got []string
+	SplitLines(strings.NewReader("a\nbb\n\nlast"), func(l string) { got = append(got, l) })
+	if strings.Join(got, "|") != "a|bb||last" {
+		t.Fatalf("got %q", got)
+	}
+	got = nil
+	SplitLines(strings.NewReader(strings.Repeat("x", MaxLine*2+5)+"\ny"), func(l string) { got = append(got, l) })
+	if len(got) != 4 || len(got[0]) != MaxLine || len(got[2]) != 5 || got[3] != "y" {
+		t.Fatalf("long line split into %d parts", len(got))
+	}
+}
+
+// fakeSystemdRun stands in for systemd-run: it runs the bash command from
+// its arguments directly, and records stop requests.
+func fakeTools(t *testing.T) (run, ctl, stopLog string) {
+	dir := t.TempDir()
+	stopLog = filepath.Join(dir, "stops")
+	run = filepath.Join(dir, "systemd-run")
+	ctl = filepath.Join(dir, "systemctl")
+	os.WriteFile(run, []byte(`#!/bin/bash
+while [ "$1" != "--" ]; do shift; done; shift
+exec "$@"
+`), 0o755)
+	os.WriteFile(ctl, []byte("#!/bin/bash\necho \"$@\" >> "+stopLog+"\npkill -f fake-job-marker || true\n"), 0o755)
+	return run, ctl, stopLog
+}
+
+func TestRunCapturesOutputAndExitCode(t *testing.T) {
+	run, ctl, _ := fakeTools(t)
+	x := &Systemd{SystemdRun: run, Systemctl: ctl}
+	var out, errs []string
+	res := x.Run(context.Background(), Spec{JobID: "A", Command: "echo one; echo two >&2; echo three; exit 3", Timeout: time.Minute},
+		func(l string) { out = append(out, l) }, func(l string) { errs = append(errs, l) })
+	if res.Err != nil || res.ExitCode != 3 || res.TimedOut {
+		t.Fatalf("result %+v", res)
+	}
+	if strings.Join(out, ",") != "one,three" || strings.Join(errs, ",") != "two" {
+		t.Fatalf("out=%q err=%q", out, errs)
+	}
+}
+
+func TestCancelStopsUnit(t *testing.T) {
+	run, ctl, stopLog := fakeTools(t)
+	x := &Systemd{SystemdRun: run, Systemctl: ctl}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	start := time.Now()
+	res := x.Run(ctx, Spec{JobID: "B", Command: "exec -a fake-job-marker sleep 30", Timeout: time.Minute}, func(string) {}, func(string) {})
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("cancel did not stop the job")
+	}
+	if res.ExitCode == 0 {
+		t.Fatalf("result %+v", res)
+	}
+	b, _ := os.ReadFile(stopLog)
+	if strings.TrimSpace(string(b)) != "stop peon-job-B.service" {
+		t.Fatalf("stop log %q", b)
+	}
+}
+
+func TestWatchdogMarksTimeout(t *testing.T) {
+	run, ctl, _ := fakeTools(t)
+	x := &Systemd{SystemdRun: run, Systemctl: ctl, Grace: 200 * time.Millisecond}
+	res := x.Run(context.Background(), Spec{JobID: "C", Command: "exec -a fake-job-marker sleep 30", Timeout: 300 * time.Millisecond}, func(string) {}, func(string) {})
+	if !res.TimedOut {
+		t.Fatalf("result %+v", res)
+	}
+}
+
+func TestMissingBinary(t *testing.T) {
+	x := &Systemd{SystemdRun: "/nonexistent/systemd-run"}
+	res := x.Run(context.Background(), Spec{JobID: "D", Command: "true", Timeout: time.Second}, func(string) {}, func(string) {})
+	if res.Err == nil || res.ExitCode != -1 {
+		t.Fatalf("result %+v", res)
+	}
+}
