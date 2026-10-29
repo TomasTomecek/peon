@@ -19,11 +19,13 @@ jobs:
     trigger: pull_request
     targets:
       - fedora-all
+      - epel-10
 
   - job: tests
     trigger: pull_request
     targets:
       - fedora-all
+      - epel-10
 
   # Installable RPMs from main, for your servers:
   #   dnf copr enable <owner>/peon
@@ -33,6 +35,7 @@ jobs:
     project: peon
     targets:
       - fedora-all
+      - epel-10
 
   # Tagged releases (vX.Y.Z) into a separate, stable Copr project.
   - job: copr_build
@@ -40,3 +43,4 @@ jobs:
     project: peon-releases
     targets:
       - fedora-all
+      - epel-10
