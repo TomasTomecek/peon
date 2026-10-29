@@ -9,8 +9,11 @@ URL:            https://github.com/TomasTomecek/peon
 # (Packit runs it for every build; for releases, attach its output).
 Source0:        %{name}-%{version}.tar.gz
 
-# Go does not support every architecture Fedora builds for.
-ExclusiveArch:  %{golang_arches}
+# Go does not support every architecture Fedora builds for. The fallback
+# keeps the header valid when go-srpm-macros is missing at SRPM build time;
+# otherwise the literal "%%{golang_arches}" matches no architecture and
+# Copr skips every chroot without writing a build log.
+ExclusiveArch:  %{?golang_arches}%{!?golang_arches:x86_64 aarch64 ppc64le s390x riscv64}
 
 BuildRequires:  golang >= 1.22
 BuildRequires:  systemd-rpm-macros
@@ -78,5 +81,5 @@ exit 0
 %dir %attr(0750,peon,peon) %{_sharedstatedir}/peon
 
 %changelog
-* Thu Oct 29 2026 Tomas Tomecek <nereone@gmail.com> - 0.1.0-1
+* Thu Oct 29 2026 Tomas Tomecek <tomas@tomecek.net> - 0.1.0-1
 - Initial package: config validation, systemd unit, polkit rule

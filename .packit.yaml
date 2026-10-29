@@ -6,6 +6,7 @@ upstream_tag_template: "v{version}"
 
 srpm_build_deps:
   - golang
+  - go-srpm-macros
   - git
   - rpm-build
 
