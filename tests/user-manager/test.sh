@@ -1,5 +1,15 @@
 #!/bin/bash
 # Keep run_as_user in sync with internal/executor Systemd.Args.
+#
+# Output of run_as_user is only ever captured through pipes, as peon does.
+# systemd-run --pipe hands its stdio to PID 1, and SELinux doesn't let
+# init_t write files in /tmp (user_tmp_t): redirecting to a file there
+# makes systemd-run fail with "Bad message".
+
+# Trace to a separate descriptor, so "2>&1" below captures only what the
+# job and systemd-run print, not the shell's own trace.
+exec 9>&2
+BASH_XTRACEFD=9
 set -euxo pipefail
 
 helper=/usr/libexec/peon/stop-user-unit
@@ -15,18 +25,19 @@ for _ in $(seq 60); do
 done
 systemctl is-active "user@$uid.service"
 
-# On failure, show what the user manager and SELinux saw: a stop denied by
-# SELinux only says "Access denied" in systemctl's output.
+# On failure, show what SELinux and the journal saw: systemctl reports
+# every denial, SELinux ones included, only as "Access denied".
 diagnose() {
     set +e
     getenforce
     if command -v ausearch >/dev/null; then
-        ausearch -m AVC,USER_AVC -ts recent
+        ausearch -m AVC,USER_AVC,SELINUX_ERR -ts recent
     fi
     journalctl --no-pager -n 50 _UID="$uid"
-    journalctl --no-pager -n 50 -u 'peon-job-*'
+    journalctl --no-pager -n 300 | grep -F peon-job | tail -n 50
 }
-trap diagnose ERR
+tmp="$(mktemp -d)"
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then diagnose; fi; rm -rf "$tmp"' EXIT
 
 # run_as_user UNIT COMMAND
 run_as_user() {
@@ -49,37 +60,29 @@ user_systemctl() {
     runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@"
 }
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-
-# Runs as the user, in their home, inside their user manager. The stop
-# helper runs after every job; when the job already finished it must stay
-# quiet, or its output would end up in every job's result.
-test "$(run_as_user peon-job-t1.service 'id -un' 2>"$tmp/t1.err")" = "$user"
-if [ -s "$tmp/t1.err" ]; then
-    echo "unexpected stderr from a successful job:" >&2
-    cat "$tmp/t1.err" >&2
-    diagnose
-    exit 1
-fi
-test "$(run_as_user peon-job-t2.service 'pwd')" = "$(getent passwd "$user" | cut -d: -f6)"
-test "$(run_as_user peon-job-t3.service 'systemctl --user show-environment >/dev/null && echo ok')" = ok
-cgroup="$(run_as_user peon-job-t4.service 'cat /proc/self/cgroup')"
+# Runs as the user, in their home, inside their user manager. stderr is
+# folded into the captured output: the stop helper runs after every job and
+# must stay quiet when the job already finished, or its output would end up
+# in every job's result.
+test "$(run_as_user peon-job-t1.service 'id -un' 2>&1)" = "$user"
+test "$(run_as_user peon-job-t2.service 'pwd' 2>&1)" = "$(getent passwd "$user" | cut -d: -f6)"
+test "$(run_as_user peon-job-t3.service 'systemctl --user show-environment >/dev/null && echo ok' 2>&1)" = ok
+cgroup="$(run_as_user peon-job-t4.service 'cat /proc/self/cgroup' 2>&1)"
 grep -q "user@$uid.service" <<< "$cgroup"
 
 # Rootless podman gets the systemd cgroup manager, not the cgroupfs fallback.
-test "$(run_as_user peon-job-t5.service 'podman info --format "{{.Host.CgroupManager}}"')" = systemd
+test "$(run_as_user peon-job-t5.service 'podman info --format "{{.Host.CgroupManager}}"' 2>/dev/null)" = systemd
 
 # Exit codes come through both layers, and a failed job is quiet too.
 set +e
-run_as_user peon-job-t6.service 'exit 7' 2>"$tmp/t6.err"
+out="$(run_as_user peon-job-t6.service 'exit 7' 2>&1)"
 rc=$?
 set -e
 test "$rc" -eq 7
-test ! -s "$tmp/t6.err"
+test -z "$out"
 
 # Stopping the outer unit (👎, timeout, shutdown) also stops the inner one.
-run_as_user peon-job-t7.service 'sleep 300' 2>"$tmp/t7.err" &
+run_as_user peon-job-t7.service 'sleep 300' 2>&1 | cat > "$tmp/t7.out" &
 pid=$!
 for _ in $(seq 30); do
     user_systemctl is-active --quiet peon-job-t7.service && break
@@ -92,15 +95,12 @@ for _ in $(seq 30); do
     user_systemctl is-active --quiet peon-job-t7.service || break
     sleep 1
 done
+cat "$tmp/t7.out"
 if user_systemctl is-active --quiet peon-job-t7.service; then
     echo "inner unit still running after the outer unit was stopped" >&2
-    cat "$tmp/t7.err" >&2
-    diagnose
     exit 1
 fi
-if grep -q "Access denied\|Failed to stop" "$tmp/t7.err"; then
-    echo "the stop helper reported an error:" >&2
-    cat "$tmp/t7.err" >&2
-    diagnose
+if grep -q "Access denied\|Failed to stop" "$tmp/t7.out"; then
+    echo "the stop helper reported an error" >&2
     exit 1
 fi
