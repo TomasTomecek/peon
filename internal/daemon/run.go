@@ -238,9 +238,7 @@ func (d *Daemon) runJob(ctx context.Context, j *job.Job) {
 
 	lines, truncated := tl.get()
 	body := job.RenderResult(j, job.Result{Tail: lines, Truncated: truncated, GrafanaURL: d.grafanaURL(j), LogQL: logQL(j)})
-	if _, err := d.fj.CreateComment(final, j.Record.Repo, j.Record.Issue, body); err != nil {
-		d.log.Warn("posting job result failed", "job", j.Record.JobID, "err", err)
-	}
+	d.post(final, j, "result", body)
 	d.log.Info("job finished", "job", j.Record.JobID, "state", j.State, "exit", res.ExitCode)
 }
 
@@ -294,9 +292,7 @@ func (d *Daemon) Recover(ctx context.Context) {
 		d.save()
 		d.event(ctx, j, "finished", map[string]any{"reason": reason}, false)
 		body := job.RenderResult(j, job.Result{GrafanaURL: d.grafanaURL(j), LogQL: logQL(j)})
-		if _, err := d.fj.CreateComment(ctx, j.Record.Repo, j.Record.Issue, body); err != nil {
-			d.log.Warn("posting interrupted job result failed", "job", j.Record.JobID, "err", err)
-		}
+		d.post(ctx, j, "result", body)
 		d.log.Warn("recovered interrupted job", "job", j.Record.JobID)
 	}
 }

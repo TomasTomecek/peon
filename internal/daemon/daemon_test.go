@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/TomasTomecek/peon/internal/executor"
+	"github.com/TomasTomecek/peon/internal/forgejo"
 	"github.com/TomasTomecek/peon/internal/job"
 )
 
@@ -521,5 +524,104 @@ func TestDefaultUserApplies(t *testing.T) {
 	_, id := h.propose(runRestart)
 	if got := h.st.Jobs[id].Record.User; got != "deploy" {
 		t.Fatalf("user = %q", got)
+	}
+}
+
+var errForgejoDown = errors.New("forgejo down")
+
+// resultComments returns peon's comments that report a job outcome.
+func (h *harness) resultComments() []string {
+	var out []string
+	for _, c := range h.fj.botComments() {
+		if !strings.Contains(c.Body, "👍 to approve") {
+			out = append(out, c.Body)
+		}
+	}
+	return out
+}
+
+func TestResultCommentRetriedUntilForgejoRecovers(t *testing.T) {
+	h := newHarness(t)
+	card, id := h.propose(runRestart)
+	h.fj.react(card, approverID, "+1")
+	h.exec.onRun = func(executor.Spec) { h.fj.setPostErr(errForgejoDown) }
+	h.tickAndWait()
+	if h.st.Jobs[id].State != job.Succeeded || len(h.resultComments()) != 0 || len(h.st.Outbox) != 1 {
+		t.Fatalf("state %s, results %d, outbox %d", h.st.Jobs[id].State, len(h.resultComments()), len(h.st.Outbox))
+	}
+	h.exec.onRun = nil
+
+	// Still down: retried after the delay, still queued.
+	h.clock.Add(11 * time.Second)
+	h.tick()
+	if len(h.st.Outbox) != 1 || h.st.Outbox[0].Attempts != 2 {
+		t.Fatalf("outbox %+v", h.st.Outbox[0])
+	}
+
+	// Recovered, but peon also restarted in between: the queue survives.
+	h.fj.setPostErr(nil)
+	h.restart()
+	h.tick()
+	if len(h.resultComments()) != 0 {
+		t.Fatal("posted before the retry was due")
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	results := h.resultComments()
+	if len(results) != 1 || !strings.Contains(results[0], "**succeeded**") || len(h.st.Outbox) != 0 {
+		t.Fatalf("results %d, outbox %d", len(results), len(h.st.Outbox))
+	}
+	if !strings.Contains(strings.Join(h.loki.events(id), ","), "comment_posted") {
+		t.Fatal("delayed post not recorded in Loki")
+	}
+	h.clock.Add(time.Hour)
+	h.tick()
+	if len(h.resultComments()) != 1 {
+		t.Fatal("result posted twice")
+	}
+}
+
+func TestOutboxKeepsOrderAndGivesUpAfterADay(t *testing.T) {
+	h := newHarness(t)
+	cardA, idA := h.propose("/run db1\n```\necho a\n```")
+	cardB, idB := h.propose("/run db1\n```\necho b\n```")
+	h.fj.setPostErr(errForgejoDown)
+	h.fj.react(cardA, approverID, "-1")
+	h.tick()
+	h.clock.Add(time.Second)
+	h.fj.react(cardB, approverID, "-1")
+	h.tick()
+	if len(h.st.Outbox) != 2 || h.st.Outbox[0].JobID != idA || h.st.Outbox[1].JobID != idB {
+		t.Fatalf("outbox order wrong")
+	}
+	for i := 0; i < 200 && len(h.st.Outbox) > 0; i++ {
+		h.clock.Add(10 * time.Minute)
+		h.tick()
+	}
+	if len(h.st.Outbox) != 0 || len(h.resultComments()) != 0 {
+		t.Fatalf("outbox %d, comments %d", len(h.st.Outbox), len(h.resultComments()))
+	}
+	for _, id := range []string{idA, idB} {
+		if !strings.Contains(strings.Join(h.loki.events(id), ","), "comment_dropped") {
+			t.Fatalf("drop of %s not recorded in Loki", id)
+		}
+	}
+}
+
+func TestOutboxDropsPermanentErrorsAndMovesOn(t *testing.T) {
+	h := newHarness(t)
+	cardA, idA := h.propose("/run db1\n```\necho a\n```")
+	cardB, _ := h.propose("/run db1\n```\necho b\n```")
+	h.fj.setPostErr(&forgejo.HTTPError{Status: http.StatusForbidden, Body: "issue is locked"})
+	h.fj.react(cardA, approverID, "-1")
+	h.tick()
+	if len(h.st.Outbox) != 0 || !strings.Contains(strings.Join(h.loki.events(idA), ","), "comment_dropped") {
+		t.Fatalf("permanent error not dropped: outbox %d", len(h.st.Outbox))
+	}
+	h.fj.setPostErr(nil)
+	h.fj.react(cardB, approverID, "-1")
+	h.tick()
+	if len(h.resultComments()) != 1 {
+		t.Fatalf("later comment blocked: %d", len(h.resultComments()))
 	}
 }

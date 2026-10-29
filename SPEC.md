@@ -247,7 +247,7 @@ Requirements and checks:
 
 - Pushed via `/loki/api/v1/push` using a **push-only** credential.
 - Stream labels: `job="peon"`, `host`, `job_id`, `repo`, `issue`, `requester`, `approver`, `event`.
-- Events: `proposed`, `approved`, `rejected`, `expired`, `tampered`, `started`, `kill_requested`, `stdout`, `stderr`, `finished`.
+- Events: `proposed`, `approved`, `rejected`, `expired`, `tampered`, `started`, `kill_requested`, `stdout`, `stderr`, `finished`, `comment_posted` (after retries), `comment_dropped`.
 - Lifecycle event lines are JSON and include `job_hash`, the state, the requester, the approver, and the full command (on `proposed` and `started`). `stdout` / `stderr` lines are the raw output lines (capped at 64 KB each).
 - **Fail closed:** the job is not approved until the `approved` record is in Loki, and does not start until the `started` record is. The daemon retries every poll; if Loki is still down at the job's expiry, the job becomes `expired`. Other events are spooled when Loki is down.
 - If a push fails **during** a run, the job is not killed. Lines spool to `/var/lib/peon/spool/` and are retried in order.
@@ -260,6 +260,7 @@ Posted by the bot when the job finishes:
 - Status, exit code, duration.
 - Last `output_tail_lines` lines (default 50, max 4 KB) of combined output, unless `--private`.
 - With `--private`: only status and exit code, plus a note that the output is in Loki only.
+- Result and status comments (rejected, expired, voided, interrupted) go through a persistent **outbox** in the state file, since agents wait for them. They are posted in order; a failure is retried after 10 s, doubling up to 10 min, for up to 24 h. A permanent refusal (a 4xx other than 408/429, such as a locked or deleted issue) is dropped at once so it can't block later comments. Delayed and dropped comments are recorded in Loki (`comment_posted`, `comment_dropped`). A crash right after Forgejo accepts a comment can post it twice, but it is never lost silently.
 - A Grafana Explore link and the LogQL query `{job="peon", job_id="<id>"}`. With `grafana.loki_datasource_uid` set, the link opens the job's logs directly.
 
 ---
