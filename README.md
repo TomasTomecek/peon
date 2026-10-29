@@ -54,6 +54,9 @@ go test ./...
 go build ./cmd/peon
 ```
 
+Contributor and agent guidelines, including the security invariants every
+change must keep, are in [AGENTS.md](AGENTS.md).
+
 Packaging: `peon.spec`, `.packit.yaml`, and `packaging/create-archive.sh`,
 which builds a source tarball with vendored Go modules. Smoke tests in
 `tests/smoke/` run against the installed RPM via tmt on every pull request.
