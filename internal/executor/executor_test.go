@@ -18,8 +18,8 @@ func TestArgsPassCommandAsOneArgument(t *testing.T) {
 	want := []string{"--quiet", "--unit=peon-job-01JBQ3Y8Z4K7M2N5P6R8S9T0VW.service",
 		"--description=peon job 01JBQ3Y8Z4K7M2N5P6R8S9T0VW", "--uid=root", "--working-directory=/",
 		"--service-type=exec", "--property=RuntimeMaxSec=90",
-		"--property=StandardOutput=truncate:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stdout",
-		"--property=StandardError=truncate:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stderr",
+		"--property=StandardOutput=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stdout",
+		"--property=StandardError=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stderr",
 		"--collect", "--wait", "--",
 		"/bin/bash", "--noprofile", "--norc", "-c", cmd}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
@@ -56,8 +56,8 @@ out=; err=
 for a in "$@"; do
   case "$a" in
     --) break ;;
-    --property=StandardOutput=truncate:*) out=${a#*truncate:} ;;
-    --property=StandardError=truncate:*) err=${a#*truncate:} ;;
+    --property=StandardOutput=append:*) out=${a#*append:} ;;
+    --property=StandardError=append:*) err=${a#*append:} ;;
   esac
 done
 while [ "$1" != "--" ]; do shift; done; shift
@@ -130,8 +130,8 @@ func TestArgsForUserRunInTheirUserManager(t *testing.T) {
 		"--setenv=XDG_RUNTIME_DIR=/run/user/1001",
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus",
 		"--property=ExecStopPost=-/usr/libexec/peon/stop-user-unit peon-job-J.service",
-		"--property=StandardOutput=truncate:/out/J.stdout",
-		"--property=StandardError=truncate:/out/J.stderr",
+		"--property=StandardOutput=append:/out/J.stdout",
+		"--property=StandardError=append:/out/J.stderr",
 		"--collect", "--wait", "--",
 		"/usr/bin/systemd-run", "--user", "--quiet", "--unit=peon-job-J.service", "--description=peon job J",
 		"--service-type=exec", "--property=RuntimeMaxSec=60", "--collect", "--wait", "--pipe", "--",

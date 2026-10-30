@@ -110,8 +110,11 @@ func (x *Systemd) bin(p, def string) string {
 // own stdin, stdout and stderr to PID 1 over D-Bus, and under SELinux
 // PID 1 (init_t) may not read or write pipes created by a service
 // process, so PID 1 drops the connection ("Connection reset by peer").
-// Instead PID 1 opens the output files itself (StandardOutput=truncate:),
-// so no file descriptor crosses the bus, and peon follows the files. For
+// Instead PID 1 opens the output files itself (StandardOutput=append:),
+// so no file descriptor crosses the bus, and peon follows the files.
+// append:, not truncate:, because systemd reopens them for every command
+// of the unit, and the ExecStopPost= helper of user jobs would otherwise
+// empty them after the job ran. Run removes stale files first. For
 // user jobs the inner "systemd-run --user --pipe" passes the outer unit's
 // descriptors, which PID 1 opened, not peon's pipes.
 //
@@ -128,8 +131,8 @@ func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 	shell := []string{"/bin/bash", "--noprofile", "--norc", "-c", s.Command}
 	outPath, errPath := OutputPaths(outDir, s.JobID)
 	outProps := []string{
-		"--property=StandardOutput=truncate:" + outPath,
-		"--property=StandardError=truncate:" + errPath,
+		"--property=StandardOutput=append:" + outPath,
+		"--property=StandardError=append:" + errPath,
 	}
 	if s.User == "" || s.User == "root" {
 		return append([]string{
