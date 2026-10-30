@@ -1,10 +1,14 @@
 #!/bin/bash
 # Keep run_as_user in sync with internal/executor Systemd.Args.
 #
-# Output of run_as_user is only ever captured through pipes, as peon does.
-# systemd-run --pipe hands its stdio to PID 1, and SELinux doesn't let
-# init_t write files in /tmp (user_tmp_t): redirecting to a file there
-# makes systemd-run fail with "Bad message".
+# Like peon, run_as_user gives the outer system unit no --pipe: systemd-run
+# --pipe hands its stdio to PID 1, and SELinux does not let init_t use
+# pipes created by another service's process. PID 1 opens the output files
+# itself (StandardOutput=truncate:), and run_as_user prints them once the
+# unit has ended. The files live in a root-only directory under /var/lib,
+# not /tmp: init_t may not write files in /tmp (user_tmp_t). The inner
+# systemd-run --user keeps --pipe; it passes on the outer unit's
+# descriptors, which PID 1 opened.
 
 # Trace to a separate descriptor, so "2>&1" below captures only what the
 # job and systemd-run print, not the shell's own trace.
@@ -37,11 +41,15 @@ diagnose() {
     journalctl --no-pager -n 300 | grep -F peon-job | tail -n 50
 }
 tmp="$(mktemp -d)"
-trap 'rc=$?; if [ "$rc" -ne 0 ]; then diagnose; fi; rm -rf "$tmp"' EXIT
+outdir=/var/lib/peon-test-output
+rm -rf "$outdir"
+mkdir -m 700 "$outdir"
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then diagnose; fi; rm -rf "$tmp" "$outdir"' EXIT
 
 # run_as_user UNIT COMMAND
 run_as_user() {
     local unit="$1" cmd="$2" rundir="/run/user/$uid"
+    local out="$outdir/$unit.stdout" err="$outdir/$unit.stderr" rc=0
     systemd-run --quiet \
         --unit="$unit" --description="peon job test (as $user)" \
         --uid="$user" --property=WorkingDirectory=~ --service-type=exec \
@@ -49,11 +57,17 @@ run_as_user() {
         --setenv=XDG_RUNTIME_DIR="$rundir" \
         --setenv=DBUS_SESSION_BUS_ADDRESS="unix:path=$rundir/bus" \
         "--property=ExecStopPost=-$helper $unit" \
-        --collect --wait --pipe -- \
+        "--property=StandardOutput=truncate:$out" \
+        "--property=StandardError=truncate:$err" \
+        --collect --wait -- \
         /usr/bin/systemd-run --user --quiet \
         --unit="$unit" --description="peon job test" --service-type=exec \
         --property=RuntimeMaxSec=300 --collect --wait --pipe -- \
-        /bin/bash --noprofile --norc -c "$cmd"
+        /bin/bash --noprofile --norc -c "$cmd" || rc=$?
+    cat "$out" 2>/dev/null || true
+    cat "$err" >&2 2>/dev/null || true
+    rm -f "$out" "$err"
+    return "$rc"
 }
 
 # check NAME WANT GOT: fail with both values shown.

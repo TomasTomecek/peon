@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -62,6 +63,28 @@ type Systemd struct {
 	// Grace is how long past the timeout peon waits before stopping the
 	// unit itself, in case RuntimeMaxSec did not fire.
 	Grace time.Duration
+	// OutputDir holds the files PID 1 writes a job's stdout and stderr
+	// to while it runs. Default: /var/lib/peon/output. It must be
+	// root-only; files are removed when the job ends.
+	OutputDir string
+
+	// poll is how often followReader checks a quiet file. Default 200ms.
+	poll time.Duration
+}
+
+// DefaultOutputDir is used when Systemd.OutputDir is empty.
+const DefaultOutputDir = "/var/lib/peon/output"
+
+func (x *Systemd) outDir() string {
+	if x.OutputDir == "" {
+		return DefaultOutputDir
+	}
+	return x.OutputDir
+}
+
+// OutputPaths returns the files a job's stdout and stderr go to.
+func OutputPaths(dir, jobID string) (stdout, stderr string) {
+	return filepath.Join(dir, jobID+".stdout"), filepath.Join(dir, jobID+".stderr")
 }
 
 func (x *Systemd) bin(p, def string) string {
@@ -82,7 +105,20 @@ func (x *Systemd) bin(p, def string) string {
 // privileges, a system unit running as the user starts the command with
 // "systemd-run --user"; stopping the system unit (cancel, timeout) stops
 // the inner unit through its ExecStopPost= helper.
-func (x *Systemd) Args(s Spec, uid string) []string {
+//
+// The system unit does not get --pipe. --pipe makes systemd-run hand its
+// own stdin, stdout and stderr to PID 1 over D-Bus, and under SELinux
+// PID 1 (init_t) may not read or write pipes created by a service
+// process, so PID 1 drops the connection ("Connection reset by peer").
+// Instead PID 1 opens the output files itself (StandardOutput=truncate:),
+// so no file descriptor crosses the bus, and peon follows the files. For
+// user jobs the inner "systemd-run --user --pipe" passes the outer unit's
+// descriptors, which PID 1 opened, not peon's pipes.
+//
+// The output paths contain the job ID, which peon generates (a ULID) and
+// is never user input, so putting it in a property does not break the "no
+// input in unit properties" rule.
+func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 	secs := int64(s.Timeout / time.Second)
 	if secs < 1 {
 		secs = 1
@@ -90,6 +126,11 @@ func (x *Systemd) Args(s Spec, uid string) []string {
 	runtime := "--property=RuntimeMaxSec=" + strconv.FormatInt(secs, 10)
 	unit := UnitName(s.JobID)
 	shell := []string{"/bin/bash", "--noprofile", "--norc", "-c", s.Command}
+	outPath, errPath := OutputPaths(outDir, s.JobID)
+	outProps := []string{
+		"--property=StandardOutput=truncate:" + outPath,
+		"--property=StandardError=truncate:" + errPath,
+	}
 	if s.User == "" || s.User == "root" {
 		return append([]string{
 			"--quiet",
@@ -99,7 +140,8 @@ func (x *Systemd) Args(s Spec, uid string) []string {
 			"--working-directory=/",
 			"--service-type=exec",
 			runtime,
-			"--collect", "--wait", "--pipe",
+			outProps[0], outProps[1],
+			"--collect", "--wait",
 			"--",
 		}, shell...)
 	}
@@ -115,7 +157,8 @@ func (x *Systemd) Args(s Spec, uid string) []string {
 		"--setenv=XDG_RUNTIME_DIR=" + rundir,
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=" + rundir + "/bus",
 		"--property=ExecStopPost=-" + x.bin(x.StopHelper, StopUserUnit) + " " + unit,
-		"--collect", "--wait", "--pipe",
+		outProps[0], outProps[1],
+		"--collect", "--wait",
 		"--",
 	}
 	inner := []string{
@@ -171,8 +214,24 @@ func (x *Systemd) Run(ctx context.Context, s Spec, stdout, stderr func(string)) 
 	if err != nil {
 		return Result{ExitCode: -1, Err: err}
 	}
-	cmd := exec.Command(x.bin(x.SystemdRun, "systemd-run"), x.Args(s, uid)...)
+	dir := x.outDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Result{ExitCode: -1, Err: fmt.Errorf("output dir: %w", err)}
+	}
+	outPath, errPath := OutputPaths(dir, s.JobID)
+	cleanup := func() { os.Remove(outPath); os.Remove(errPath) }
+	cleanup()
+	defer cleanup()
+
+	// Several goroutines feed each callback; serialize them.
+	var outMu, errMu sync.Mutex
+	stdoutFn := func(l string) { outMu.Lock(); defer outMu.Unlock(); stdout(l) }
+	stderrFn := func(l string) { errMu.Lock(); defer errMu.Unlock(); stderr(l) }
+
+	cmd := exec.Command(x.bin(x.SystemdRun, "systemd-run"), x.Args(s, uid, dir)...)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
+	// These pipes carry systemd-run's own messages only. Without --pipe
+	// they are not passed to PID 1.
 	outPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return Result{ExitCode: -1, Err: err}
@@ -186,10 +245,26 @@ func (x *Systemd) Run(ctx context.Context, s Spec, stdout, stderr func(string)) 
 		return Result{ExitCode: -1, Err: fmt.Errorf("start systemd-run: %w", err)}
 	}
 
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go func() { defer readers.Done(); SplitLines(outPipe, stdout) }()
-	go func() { defer readers.Done(); SplitLines(errPipe, stderr) }()
+	// Closed once systemd-run has returned, i.e. the unit has exited.
+	unitDone := make(chan struct{})
+	poll := x.poll
+	var pipeReaders, fileReaders sync.WaitGroup
+	pipeReaders.Add(2)
+	go func() { defer pipeReaders.Done(); SplitLines(outPipe, stdoutFn) }()
+	go func() { defer pipeReaders.Done(); SplitLines(errPipe, stderrFn) }()
+	fileReaders.Add(2)
+	go func() {
+		defer fileReaders.Done()
+		fr := &followReader{path: outPath, done: unitDone, poll: poll}
+		defer fr.Close()
+		SplitLines(fr, stdoutFn)
+	}()
+	go func() {
+		defer fileReaders.Done()
+		fr := &followReader{path: errPath, done: unitDone, poll: poll}
+		defer fr.Close()
+		SplitLines(fr, stderrFn)
+	}()
 
 	// Stop the unit if we are cancelled, or if it outlives its timeout.
 	grace := x.Grace
@@ -214,8 +289,10 @@ func (x *Systemd) Run(ctx context.Context, s Spec, stdout, stderr func(string)) 
 		_ = x.Stop(stopCtx, s.JobID)
 	}()
 
-	readers.Wait()
+	pipeReaders.Wait()
 	waitErr := cmd.Wait()
+	close(unitDone)
+	fileReaders.Wait()
 	close(done)
 	stopped.Wait()
 	elapsed := time.Since(start)
@@ -244,6 +321,69 @@ func (x *Systemd) Stop(ctx context.Context, jobID string) error {
 		return fmt.Errorf("systemctl stop %s: %w: %s", UnitName(jobID), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// followReader reads a file that another process is still writing, and
+// that may not exist yet. At EOF it waits poll (or until done is closed)
+// and retries. After done is closed it reads to EOF one last time, then
+// returns io.EOF.
+type followReader struct {
+	path string
+	done <-chan struct{}
+	poll time.Duration // default 200ms
+	f    *os.File
+}
+
+func (r *followReader) isDone() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *followReader) Read(p []byte) (int, error) {
+	poll := r.poll
+	if poll <= 0 {
+		poll = 200 * time.Millisecond
+	}
+	for {
+		// Sample before reading so that a read to EOF after done means
+		// nothing more can arrive.
+		finished := r.isDone()
+		if r.f == nil {
+			f, err := os.OpenFile(r.path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			if err == nil {
+				r.f = f
+			}
+		}
+		if r.f != nil {
+			n, err := r.f.Read(p)
+			if n > 0 {
+				return n, nil
+			}
+			if err != nil && err != io.EOF {
+				return 0, err
+			}
+		}
+		if finished {
+			return 0, io.EOF
+		}
+		t := time.NewTimer(poll)
+		select {
+		case <-t.C:
+		case <-r.done:
+			t.Stop()
+		}
+	}
+}
+
+func (r *followReader) Close() {
+	if r.f != nil {
+		r.f.Close()
+		r.f = nil
+	}
 }
 
 // MaxLine is the longest line SplitLines emits; longer lines are split.
