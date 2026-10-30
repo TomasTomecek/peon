@@ -39,6 +39,7 @@ voided jobs. Warnings say what will be retried.
 | `/var/lib/peon/state.json` | jobs, comment cursors, handled comments, comments waiting to post, health |
 | `/var/lib/peon/state.json.lock` | prevents two peon processes sharing the state |
 | `/var/lib/peon/spool/` | audit records waiting for Loki |
+| `/var/lib/peon/output/` | output of the running job, removed when it ends |
 
 `state.json` is replaced atomically on every change. If peon can't parse
 it, it refuses to start rather than guess. Finished jobs and handled

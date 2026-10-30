@@ -60,7 +60,7 @@ The package installs:
 | `/usr/bin/peon` | the binary |
 | `/usr/lib/systemd/system/peon.service` | the daemon unit (not enabled) |
 | `/etc/peon/config.yaml` | example config, `root:root 0600` |
-| `/var/lib/peon/` | state and audit spool, `root:root 0700` |
+| `/var/lib/peon/` | state, audit spool and the running job's output, `root:root 0700` |
 
 ## 4. Secrets
 

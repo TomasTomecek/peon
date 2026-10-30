@@ -146,7 +146,7 @@ func run(c *config.Config, stateDir string) error {
 	}
 	defer st.Close()
 
-	d := daemon.New(c, fj, loki.New(c.Loki.URL, c.Loki.User, password, ua), spool, &executor.Systemd{}, st, log)
+	d := daemon.New(c, fj, loki.New(c.Loki.URL, c.Loki.User, password, ua), spool, &executor.Systemd{OutputDir: filepath.Join(stateDir, "output")}, st, log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	log.Info("peon starting", "version", version, "host", c.Host, "repos", c.Forgejo.Repos)
