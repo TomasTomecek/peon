@@ -4,8 +4,9 @@
 # Like peon, run_as_user gives the outer system unit no --pipe: systemd-run
 # --pipe hands its stdio to PID 1, and SELinux does not let init_t use
 # pipes created by another service's process. PID 1 opens the output files
-# itself (StandardOutput=truncate:), and run_as_user prints them once the
-# unit has ended. The files live in a root-only directory under /var/lib,
+# itself (StandardOutput=append:), and run_as_user prints them once the
+# unit has ended. append:, not truncate:: systemd reopens the files for
+# ExecStopPost=, and truncate: would empty them after the job. The files live in a root-only directory under /var/lib,
 # not /tmp: init_t may not write files in /tmp (user_tmp_t). The inner
 # systemd-run --user keeps --pipe; it passes on the outer unit's
 # descriptors, which PID 1 opened.
@@ -57,8 +58,8 @@ run_as_user() {
         --setenv=XDG_RUNTIME_DIR="$rundir" \
         --setenv=DBUS_SESSION_BUS_ADDRESS="unix:path=$rundir/bus" \
         "--property=ExecStopPost=-$helper $unit" \
-        "--property=StandardOutput=truncate:$out" \
-        "--property=StandardError=truncate:$err" \
+        "--property=StandardOutput=append:$out" \
+        "--property=StandardError=append:$err" \
         --collect --wait -- \
         /usr/bin/systemd-run --user --quiet \
         --unit="$unit" --description="peon job test" --service-type=exec \
