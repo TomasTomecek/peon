@@ -64,6 +64,20 @@ func TestClientPush(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("error = %v", err)
 	}
+
+	// A redirected push must fail, not be replayed as a GET that succeeds.
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/loki/api/v1/push" {
+			http.Redirect(w, r, "/elsewhere", http.StatusMovedPermanently)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer moved.Close()
+	err = New(moved.URL, "u", "p", "ua").Push(context.Background(), []Entry{{map[string]string{"job": "peon"}, t0, "x"}})
+	if err == nil || !strings.Contains(err.Error(), "301") {
+		t.Fatalf("error = %v, want HTTP 301", err)
+	}
 }
 
 type fakePusher struct {

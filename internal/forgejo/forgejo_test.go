@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,6 +77,49 @@ func TestCreateCommentAndErrors(t *testing.T) {
 	_, err = c.ListCommentReactions(ctx, "ops/infra", 1)
 	if err == nil || IsNotFound(err) {
 		t.Fatalf("error = %v, want HTTP 418", err)
+	}
+}
+
+// A renamed repo answers its old path with a 301 for every method. Reads
+// follow it; a write must fail instead of being replayed as a GET that
+// returns the comment list (silvermoon#169).
+func TestWriteDoesNotFollowRedirect(t *testing.T) {
+	var newPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/repos/ops/old/"):
+			http.Redirect(w, r, strings.Replace(r.URL.Path, "/ops/old/", "/ops/new/", 1), http.StatusMovedPermanently)
+		case r.URL.Path == "/api/v1/repos/ops/new/issues/comments/7":
+			json.NewEncoder(w).Encode(Comment{ID: 7})
+		case r.URL.Path == "/api/v1/repos/ops/new/issues/42/comments":
+			if r.Method == http.MethodPost {
+				newPosts++
+				json.NewEncoder(w).Encode(Comment{ID: 8})
+				return
+			}
+			json.NewEncoder(w).Encode([]Comment{{ID: 1}})
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusTeapot)
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "t", "ua")
+	ctx := context.Background()
+
+	if got, err := c.GetComment(ctx, "ops/old", 7); err != nil || got.ID != 7 {
+		t.Fatalf("read through redirect: got %+v, err %v", got, err)
+	}
+	_, err := c.CreateComment(ctx, "ops/old", 42, "hello")
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusMovedPermanently ||
+		!strings.Contains(he.Body, "/api/v1/repos/ops/new/issues/42/comments") {
+		t.Fatalf("error = %v, want HTTP 301 naming the new path", err)
+	}
+	if newPosts != 0 {
+		t.Fatalf("POST reached the new path %d times", newPosts)
+	}
+	if Transient(err) {
+		t.Fatalf("a redirect must not count as an outage: %v", err)
 	}
 }
 

@@ -104,12 +104,13 @@ func (d *Daemon) outboxEvent(ctx context.Context, o *state.Outgoing, name string
 }
 
 // permanent reports whether Forgejo refused this one comment in a way
-// retrying cannot fix: a 4xx that is not an outage. 401, 408 and 429 mean
+// retrying cannot fix: a 4xx that is not an outage, or a redirect (the repo
+// was renamed, and the job keeps its old name). 401, 408 and 429 mean
 // Forgejo or the token is unavailable, so those comments wait instead.
 func permanent(err error) bool {
 	var he *forgejo.HTTPError
 	if !errors.As(err, &he) {
 		return false
 	}
-	return he.Status >= 400 && he.Status < 500 && !forgejo.Transient(err)
+	return he.Status >= 300 && he.Status < 500 && !forgejo.Transient(err)
 }
