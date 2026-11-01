@@ -92,9 +92,24 @@ func New(baseURL, token, userAgent string) (*Client, error) {
 	return &Client{
 		base:      u,
 		token:     token,
-		http:      &http.Client{Timeout: 30 * time.Second},
+		http:      &http.Client{Timeout: 30 * time.Second, CheckRedirect: checkRedirect},
 		userAgent: userAgent,
 	}, nil
+}
+
+// checkRedirect follows redirects only for reads. Forgejo answers every
+// request on a renamed repo's old path with a 301, and net/http replays a
+// redirected POST as a GET without the body, so a comment post would get the
+// comment list back with a 2xx and post nothing. A write instead returns the
+// redirect itself, which do turns into an HTTPError.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if m := via[0].Method; m != http.MethodGet && m != http.MethodHead {
+		return http.ErrUseLastResponse
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 const pageSize = 50
@@ -136,7 +151,11 @@ func (c *Client) do(ctx context.Context, method, p string, q url.Values, in, out
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return &HTTPError{Method: method, URL: u.Redacted(), Status: resp.StatusCode, Body: strings.TrimSpace(string(b)),
+		msg := strings.TrimSpace(string(b))
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			msg = fmt.Sprintf("redirects to %q, not followed for a write; was the repo renamed?", resp.Header.Get("Location"))
+		}
+		return &HTTPError{Method: method, URL: u.Redacted(), Status: resp.StatusCode, Body: msg,
 			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if out == nil {

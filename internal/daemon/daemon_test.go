@@ -612,20 +612,30 @@ func TestOutboxKeepsOrderAndGivesUpAfterADay(t *testing.T) {
 }
 
 func TestOutboxDropsPermanentErrorsAndMovesOn(t *testing.T) {
-	h := newHarness(t)
-	cardA, idA := h.propose("/run db1\n```\necho a\n```")
-	cardB, _ := h.propose("/run db1\n```\necho b\n```")
-	h.fj.setPostErr(&forgejo.HTTPError{Status: http.StatusForbidden, Body: "issue is locked"})
-	h.fj.react(cardA, approverID, "-1")
-	h.tick()
-	if len(h.st.Outbox) != 0 || !strings.Contains(strings.Join(h.loki.events(idA), ","), "comment_dropped") {
-		t.Fatalf("permanent error not dropped: outbox %d", len(h.st.Outbox))
-	}
-	h.fj.setPostErr(nil)
-	h.fj.react(cardB, approverID, "-1")
-	h.tick()
-	if len(h.resultComments()) != 1 {
-		t.Fatalf("later comment blocked: %d", len(h.resultComments()))
+	for _, perm := range []*forgejo.HTTPError{
+		{Status: http.StatusForbidden, Body: "issue is locked"},
+		{Status: http.StatusMovedPermanently, Body: `redirects to "/api/v1/repos/ops/new/issues/1/comments"`},
+	} {
+		t.Run(strconv.Itoa(perm.Status), func(t *testing.T) {
+			h := newHarness(t)
+			cardA, idA := h.propose("/run db1\n```\necho a\n```")
+			cardB, _ := h.propose("/run db1\n```\necho b\n```")
+			h.fj.setPostErr(perm)
+			h.fj.react(cardA, approverID, "-1")
+			h.tick()
+			if len(h.st.Outbox) != 0 || !strings.Contains(strings.Join(h.loki.events(idA), ","), "comment_dropped") {
+				t.Fatalf("permanent error not dropped: outbox %d", len(h.st.Outbox))
+			}
+			if h.d.fjFailures != 0 {
+				t.Fatalf("permanent error counted as an outage: failures %d", h.d.fjFailures)
+			}
+			h.fj.setPostErr(nil)
+			h.fj.react(cardB, approverID, "-1")
+			h.tick()
+			if len(h.resultComments()) != 1 {
+				t.Fatalf("later comment blocked: %d", len(h.resultComments()))
+			}
+		})
 	}
 }
 

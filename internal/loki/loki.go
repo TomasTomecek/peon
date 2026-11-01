@@ -41,7 +41,11 @@ func New(baseURL, user, password, userAgent string) *Client {
 		user:      user,
 		password:  password,
 		userAgent: userAgent,
-		http:      &http.Client{Timeout: 15 * time.Second},
+		// A redirected push would be replayed as a GET without the body.
+		// Fail instead, so nothing is reported as pushed that was not.
+		http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
 	}
 }
 
