@@ -60,4 +60,5 @@ change must keep, are in [AGENTS.md](AGENTS.md).
 Packaging: `peon.spec`, `.packit.yaml`, and `packaging/create-archive.sh`,
 which builds a source tarball with vendored Go modules. On every pull
 request, Testing Farm runs the Go unit tests (`tests/unit/`) and tests
-against the installed RPM (`tests/smoke/`, `tests/user-manager/`) via tmt.
+against the installed RPM (`tests/smoke/`, `tests/user-manager/`,
+`tests/selinux-domain/`) via tmt.
