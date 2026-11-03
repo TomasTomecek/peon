@@ -47,6 +47,9 @@ type Executor interface {
 // (dist/stop-user-unit). See that script for why it is not systemctl.
 const StopUserUnit = "/usr/libexec/peon/stop-user-unit"
 
+// RootSELinuxContext is the SELinux context root jobs run in; see Args.
+const RootSELinuxContext = "SELinuxContext=system_u:system_r:unconfined_service_t:s0"
+
 // UnitName is the systemd unit a job runs in.
 func UnitName(jobID string) string { return "peon-job-" + jobID + ".service" }
 
@@ -118,6 +121,17 @@ func (x *Systemd) bin(p, def string) string {
 // user jobs the inner "systemd-run --user --pipe" passes the outer unit's
 // descriptors, which PID 1 opened, not peon's pipes.
 //
+// Root jobs set SELinuxContext= to unconfined_service_t. Without it,
+// PID 1 (init_t) executing /bin/bash (shell_exec_t) transitions to
+// initrc_t, and initrc_t transitions into the program's own domain for
+// hundreds of programs (nmap, ip, ping, tcpdump). Those domains may not
+// write the output files (var_lib_t), so on exec the kernel replaces the
+// program's stdout and stderr with /dev/null and its output is lost
+// without an error. unconfined_service_t is the domain systemd gives to
+// bin_t programs and has almost no such transitions. systemd ignores the
+// property when SELinux is disabled. User jobs need nothing: their outer
+// unit runs systemd-run (bin_t) and the shell runs in the user's manager.
+//
 // The output paths contain the job ID, which peon generates (a ULID) and
 // is never user input, so putting it in a property does not break the "no
 // input in unit properties" rule.
@@ -143,6 +157,7 @@ func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 			"--working-directory=/",
 			"--service-type=exec",
 			runtime,
+			"--property=" + RootSELinuxContext,
 			outProps[0], outProps[1],
 			"--collect", "--wait",
 			"--",

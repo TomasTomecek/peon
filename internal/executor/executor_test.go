@@ -18,6 +18,7 @@ func TestArgsPassCommandAsOneArgument(t *testing.T) {
 	want := []string{"--quiet", "--unit=peon-job-01JBQ3Y8Z4K7M2N5P6R8S9T0VW.service",
 		"--description=peon job 01JBQ3Y8Z4K7M2N5P6R8S9T0VW", "--uid=root", "--working-directory=/",
 		"--service-type=exec", "--property=RuntimeMaxSec=90",
+		"--property=SELinuxContext=system_u:system_r:unconfined_service_t:s0",
 		"--property=StandardOutput=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stdout",
 		"--property=StandardError=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stderr",
 		"--collect", "--wait", "--",

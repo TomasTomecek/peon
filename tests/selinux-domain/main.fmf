@@ -1,0 +1,14 @@
+summary: Root jobs run in unconfined_service_t and keep confined programs' output
+description: |
+    Runs the exact systemd-run invocation the executor builds for a root
+    job (internal/executor Systemd.Args) on a real systemd with SELinux
+    enforcing. Without SELinuxContext=, the job's shell runs in initrc_t,
+    and programs with their own domain (ip, ping, nmap) lose their stdout
+    and stderr to /dev/null when they start (tt/peon#3).
+test: ./test.sh
+duration: 5m
+require:
+  - systemd
+  - iproute
+  - iputils
+  - policycoreutils
