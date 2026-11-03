@@ -1,0 +1,9 @@
+[Unit]
+Description=Upgrade peon and restart it when no job is running
+Documentation=https://github.com/TomasTomecek/peon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/peon/update

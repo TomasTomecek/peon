@@ -1,0 +1,76 @@
+#!/bin/bash
+# Upgrade peon and restart the daemon, but only while it is idle.
+#
+# Run daily by peon-update.timer, which the RPM installs but does not
+# enable. The RPM never restarts peon on upgrade, because a restart stops
+# the running job (it is reported "interrupted" and never re-run). This
+# script restarts peon only when the daemon runs an older package than the
+# installed one and "peon status --json" shows no running job and no
+# approved job waiting to start. When peon is busy it leaves it alone and
+# the next timer run tries again.
+#
+# There is a window of a few milliseconds between reading the status and
+# the restart in which the daemon could start a job that was approved in
+# that instant. Approved jobs that have not started survive a restart.
+#
+# Usage: update [--no-upgrade] [--state-dir DIR]
+#   --no-upgrade     skip "dnf upgrade" and only decide about the restart
+#   --state-dir DIR  passed to "peon status" (default /var/lib/peon)
+set -euo pipefail
+
+unit=peon.service
+peon=/usr/bin/peon
+config=/etc/peon/config.yaml
+state_dir=/var/lib/peon
+upgrade=1
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-upgrade) upgrade=0 ;;
+        --state-dir) state_dir="${2:?--state-dir needs a directory}"; shift ;;
+        *) echo "update: unknown argument '$1'" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+say() { echo "peon-update: $*"; }
+
+# A failed upgrade (network, repo down) does not stop the restart check: the
+# daemon may still run an older package installed by hand. The script exits
+# with dnf's status at the end, so the failure shows in the unit's state.
+rc=0
+if [ "$upgrade" = 1 ]; then
+    /usr/bin/dnf -y --refresh upgrade peon || rc=$?
+fi
+
+status="$("$peon" --state-dir "$state_dir" status --json)"
+running="$(jq -r '.running.id // empty' <<<"$status")"
+queued="$(jq -r '.queued | length' <<<"$status")"
+if [ -n "$running" ] || [ "$queued" != 0 ]; then
+    say "busy (running: ${running:-none}, queued: $queued), skipping the restart; the next run tries again"
+    exit "$rc"
+fi
+
+if [ "$(systemctl is-active "$unit" || true)" != active ]; then
+    say "$unit is not active, leaving it stopped"
+    exit "$rc"
+fi
+
+installed="$(rpm -q --qf '%{INSTALLTIME}' peon)"
+started="$(systemctl show --property=ExecMainStartTimestamp --timestamp=unix --value "$unit")"
+started="${started#@}"
+if [ -n "$started" ] && [ "$started" -gt "$installed" ]; then
+    say "the daemon already runs the installed package ($(rpm -q peon))"
+    exit "$rc"
+fi
+
+# A new version that rejects the config would fail ExecStartPre and leave
+# peon down. Keep the old daemon running instead.
+if ! "$peon" --config "$config" check-config; then
+    say "the installed peon rejects $config, not restarting"
+    exit 1
+fi
+
+say "restarting $unit to run $(rpm -q peon)"
+systemctl restart "$unit"
+exit "$rc"
