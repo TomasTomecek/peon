@@ -93,6 +93,41 @@ reported **interrupted**. It is never run again. Jobs that were approved
 but not yet started survive a restart, and still start only before their
 expiry.
 
+### Automatic updates
+
+The RPM ships `peon-update.timer`, which it installs but does not enable.
+Enable it to upgrade peon daily (at a random time in the first hour after
+midnight, or at boot if the host was off then):
+
+```
+systemctl enable --now peon-update.timer
+systemctl list-timers peon-update.timer   # next run
+journalctl -u peon-update                 # what each run did
+```
+
+Each run of `peon-update.service` runs `/usr/libexec/peon/update`, which:
+
+1. runs `dnf -y --refresh upgrade peon`;
+2. reads `peon status --json` and stops there if a job is running or an
+   approved job waits to start, so the next run tries again;
+3. leaves peon alone if `peon.service` is not active, or if the daemon
+   started after the installed package was installed;
+4. runs `peon check-config` with the new binary and keeps the old daemon
+   running if it fails;
+5. restarts `peon.service`.
+
+Step 3 also catches up after an upgrade done by hand (`dnf upgrade` with
+no restart): the next run restarts the daemon once it is idle. A failed
+`dnf` run still lets steps 2 to 5 run, and marks the unit failed.
+
+A job approved in the few milliseconds between step 2 and the restart
+could still start and be interrupted. The daemon has no "drain" mode to
+close that window.
+
+New builds reach a host only when dnf sees them. dnf5 keeps repository
+metadata for 48 hours by default, so set `metadata_expire=1h` on the peon
+Copr repository if updates should land within a day.
+
 ## Rotating credentials
 
 peon reads its secrets at startup.

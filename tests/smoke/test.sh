@@ -42,3 +42,30 @@ if peon --config "$tmp/config.yaml" check-config; then
     echo "world-readable token unexpectedly accepted" >&2
     exit 1
 fi
+
+# The self-update units parse, and the RPM does not enable the timer.
+systemd-analyze verify /usr/lib/systemd/system/peon-update.service /usr/lib/systemd/system/peon-update.timer
+test "$(stat -c '%U:%G %a' /usr/libexec/peon/update)" = "root:root 755"
+test "$(systemctl is-enabled peon-update.timer || true)" = disabled
+
+# The update script leaves a busy peon alone: with a running job, or an
+# approved job waiting to start, it neither restarts nor starts peon.
+mkdir -m 0700 "$tmp/state"
+busy_state() {
+    printf '{"version": 1, "jobs": {"01SMOKE": {"record": {"job_id": "01SMOKE", "command": "sleep 1"}, "state": "%s"}}}\n' "$1" \
+        > "$tmp/state/state.json"
+}
+for s in running approved; do
+    busy_state "$s"
+    out="$(/usr/libexec/peon/update --no-upgrade --state-dir "$tmp/state")"
+    echo "$out"
+    grep -q "busy" <<<"$out"
+    test "$(systemctl is-active peon.service || true)" = inactive
+done
+
+# An idle peon that is not running stays stopped.
+busy_state succeeded
+out="$(/usr/libexec/peon/update --no-upgrade --state-dir "$tmp/state")"
+echo "$out"
+grep -q "is not active, leaving it stopped" <<<"$out"
+test "$(systemctl is-active peon.service || true)" = inactive

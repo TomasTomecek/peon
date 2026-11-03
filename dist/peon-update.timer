@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily peon upgrade, restarting it only when idle
+Documentation=https://github.com/TomasTomecek/peon
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

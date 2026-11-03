@@ -20,6 +20,10 @@ BuildRequires:  systemd-rpm-macros
 # peon.service drops all capabilities. systemd 257+ authorizes managing
 # units by the caller's UID 0 alone; older releases check CAP_SYS_ADMIN.
 Requires:       systemd >= 257
+# /usr/libexec/peon/update reads "peon status --json" with jq and upgrades
+# with dnf.
+Requires:       jq
+Requires:       /usr/bin/dnf
 %{?systemd_requires}
 
 %description
@@ -44,19 +48,24 @@ go build -buildmode=pie \
 %install
 install -Dpm0755 %{name} %{buildroot}%{_bindir}/%{name}
 install -Dpm0755 dist/stop-user-unit %{buildroot}%{_libexecdir}/peon/stop-user-unit
+install -Dpm0755 dist/update %{buildroot}%{_libexecdir}/peon/update
 install -Dpm0644 dist/peon.service %{buildroot}%{_unitdir}/peon.service
+install -Dpm0644 dist/peon-update.service %{buildroot}%{_unitdir}/peon-update.service
+install -Dpm0644 dist/peon-update.timer %{buildroot}%{_unitdir}/peon-update.timer
 install -Dpm0600 dist/config.yaml %{buildroot}%{_sysconfdir}/peon/config.yaml
 install -dm0700 %{buildroot}%{_sharedstatedir}/peon
 
 %post
-%systemd_post peon.service
+# Presets decide; Fedora's default enables neither peon.service nor
+# peon-update.timer. The operator enables the timer to get updates.
+%systemd_post peon.service peon-update.service peon-update.timer
 
 %preun
-%systemd_preun peon.service
+%systemd_preun peon.service peon-update.service peon-update.timer
 
 %postun
 # Never restart on upgrade: a restart could interrupt a running job.
-%systemd_postun peon.service
+%systemd_postun peon.service peon-update.service peon-update.timer
 
 %files
 %license LICENSE
@@ -64,7 +73,10 @@ install -dm0700 %{buildroot}%{_sharedstatedir}/peon
 %{_bindir}/%{name}
 %dir %{_libexecdir}/peon
 %{_libexecdir}/peon/stop-user-unit
+%{_libexecdir}/peon/update
 %{_unitdir}/peon.service
+%{_unitdir}/peon-update.service
+%{_unitdir}/peon-update.timer
 %dir %attr(0700,root,root) %{_sysconfdir}/peon
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/peon/config.yaml
 %dir %attr(0700,root,root) %{_sharedstatedir}/peon
