@@ -54,7 +54,7 @@ run_as_user() {
     systemd-run --quiet \
         --unit="$unit" --description="peon job test (as $user)" \
         --uid="$user" --property=WorkingDirectory=~ --service-type=exec \
-        --property=RuntimeMaxSec=300 \
+        --expand-environment=no --property=RuntimeMaxSec=300 \
         --setenv=XDG_RUNTIME_DIR="$rundir" \
         --setenv=DBUS_SESSION_BUS_ADDRESS="unix:path=$rundir/bus" \
         "--property=ExecStopPost=-$helper $unit" \
@@ -63,7 +63,8 @@ run_as_user() {
         --collect --wait -- \
         /usr/bin/systemd-run --user --quiet \
         --unit="$unit" --description="peon job test" --service-type=exec \
-        --property=RuntimeMaxSec=300 --collect --wait --pipe -- \
+        --expand-environment=no --property=RuntimeMaxSec=300 \
+        --collect --wait --pipe -- \
         /bin/bash --noprofile --norc -c "$cmd" || rc=$?
     cat "$out" 2>/dev/null || true
     cat "$err" >&2 2>/dev/null || true
@@ -97,6 +98,11 @@ check T4 "0::/user.slice/user-$uid.slice/user@$uid.service/app.slice/peon-job-T4
 
 # Rootless podman gets the systemd cgroup manager, not the cgroupfs fallback.
 check T5 systemd "$(run_as_user peon-job-T5.service 'podman info --format "{{.Host.CgroupManager}}"' 2>/dev/null)"
+
+# Shell variables pass both systemd-run layers unexpanded.
+# shellcheck disable=SC2016 # bash, not this script, expands it
+check T8 "x y" "$(run_as_user peon-job-T8.service 'v="x y"
+echo "${v}"' 2>&1)"
 
 # Exit codes come through both layers, and a failed job is quiet too.
 set +e

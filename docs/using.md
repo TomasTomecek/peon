@@ -37,8 +37,8 @@ hash `3f9ac21e0b7d`
   stored copy, never anything re-read from Forgejo. Commands can only
   contain printable ASCII, so there is no hidden Unicode, and the block
   can't be broken out of.
-- **Warnings** flag things that are hard to review on a phone (multiple
-  lines, long lines) or often dangerous (`base64`, `curl | sh`, `eval`,
+- **Warnings** flag things that are hard to review on a phone (long
+  lines) or often dangerous (`base64`, `curl | sh`, `eval`,
   `rm -rf /`, `dd`, `mkfs`, raw block devices). They never block a job.
   You decide.
 - **Runs as** says who the command runs as. Non-root jobs say "(in their

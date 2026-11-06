@@ -17,7 +17,7 @@ func TestArgsPassCommandAsOneArgument(t *testing.T) {
 	args := x.Args(Spec{JobID: "01JBQ3Y8Z4K7M2N5P6R8S9T0VW", Command: cmd, Timeout: 90 * time.Second}, "0", "/out")
 	want := []string{"--quiet", "--unit=peon-job-01JBQ3Y8Z4K7M2N5P6R8S9T0VW.service",
 		"--description=peon job 01JBQ3Y8Z4K7M2N5P6R8S9T0VW", "--uid=root", "--working-directory=/",
-		"--service-type=exec", "--property=RuntimeMaxSec=90",
+		"--service-type=exec", "--expand-environment=no", "--property=RuntimeMaxSec=90",
 		"--property=SELinuxContext=system_u:system_r:unconfined_service_t:s0",
 		"--property=StandardOutput=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stdout",
 		"--property=StandardError=append:/out/01JBQ3Y8Z4K7M2N5P6R8S9T0VW.stderr",
@@ -127,7 +127,8 @@ func TestArgsForUserRunInTheirUserManager(t *testing.T) {
 	x := &Systemd{}
 	args := x.Args(Spec{JobID: "J", Command: "podman ps", Timeout: time.Minute, User: "deploy"}, "1001", "/out")
 	want := []string{"--quiet", "--unit=peon-job-J.service", "--description=peon job J (as deploy)",
-		"--uid=deploy", "--property=WorkingDirectory=~", "--service-type=exec", "--property=RuntimeMaxSec=60",
+		"--uid=deploy", "--property=WorkingDirectory=~", "--service-type=exec", "--expand-environment=no",
+		"--property=RuntimeMaxSec=60",
 		"--setenv=XDG_RUNTIME_DIR=/run/user/1001",
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus",
 		"--property=ExecStopPost=-/usr/libexec/peon/stop-user-unit peon-job-J.service",
@@ -135,7 +136,8 @@ func TestArgsForUserRunInTheirUserManager(t *testing.T) {
 		"--property=StandardError=append:/out/J.stderr",
 		"--collect", "--wait", "--",
 		"/usr/bin/systemd-run", "--user", "--quiet", "--unit=peon-job-J.service", "--description=peon job J",
-		"--service-type=exec", "--property=RuntimeMaxSec=60", "--collect", "--wait", "--pipe", "--",
+		"--service-type=exec", "--expand-environment=no", "--property=RuntimeMaxSec=60",
+		"--collect", "--wait", "--pipe", "--",
 		"/bin/bash", "--noprofile", "--norc", "-c", "podman ps"}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args =\n%q\nwant\n%q", args, want)

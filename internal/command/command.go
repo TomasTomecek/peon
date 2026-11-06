@@ -159,11 +159,7 @@ func Validate(cmd string, maxBytes int) (warnings []string, err error) {
 		}
 	}
 
-	lines := strings.Split(cmd, "\n")
-	if len(lines) > 1 {
-		warnings = append(warnings, fmt.Sprintf("%d lines: read every line", len(lines)))
-	}
-	for n, l := range lines {
+	for n, l := range strings.Split(cmd, "\n") {
 		if len(l) > 80 {
 			warnings = append(warnings, fmt.Sprintf("line %d is %d characters long (hard to read on a phone)", n+1, len(l)))
 		}

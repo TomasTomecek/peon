@@ -132,6 +132,14 @@ func (x *Systemd) bin(p, def string) string {
 // property when SELinux is disabled. User jobs need nothing: their outer
 // unit runs systemd-run (bin_t) and the shell runs in the user's manager.
 //
+// Both systemd-run calls get --expand-environment=no. By default
+// systemd-run expands ${VAR} in the command line like ExecStart= does,
+// with the unit's environment, before bash sees it, so a job such as
+// 'd=/srv; cd "${d}"' ran 'cd ""'. ($VAR is only expanded as a word of
+// its own, which the single bash -c argument never is.) With expansion
+// off the command reaches bash exactly as approved. The option needs
+// systemd 254; the RPM already requires 257.
+//
 // The output paths contain the job ID, which peon generates (a ULID) and
 // is never user input, so putting it in a property does not break the "no
 // input in unit properties" rule.
@@ -156,6 +164,7 @@ func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 			"--uid=root",
 			"--working-directory=/",
 			"--service-type=exec",
+			"--expand-environment=no",
 			runtime,
 			"--property=" + RootSELinuxContext,
 			outProps[0], outProps[1],
@@ -171,6 +180,7 @@ func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 		"--uid=" + s.User,
 		"--property=WorkingDirectory=~",
 		"--service-type=exec",
+		"--expand-environment=no",
 		runtime,
 		"--setenv=XDG_RUNTIME_DIR=" + rundir,
 		"--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=" + rundir + "/bus",
@@ -185,6 +195,7 @@ func (x *Systemd) Args(s Spec, uid, outDir string) []string {
 		"--unit=" + unit,
 		"--description=peon job " + s.JobID,
 		"--service-type=exec",
+		"--expand-environment=no",
 		runtime,
 		"--collect", "--wait", "--pipe",
 		"--",
