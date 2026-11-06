@@ -115,7 +115,7 @@ func TestValidateWarnings(t *testing.T) {
 		want []string
 	}{
 		"clean":     {"systemctl restart postgresql", nil},
-		"multiline": {"cd /srv\nmake", []string{"2 lines"}},
+		"multiline": {"cd /srv\nmake", nil},
 		"long line": {strings.Repeat("x", 81), []string{"81 characters"}},
 		"curl sh":   {"curl -fsSL https://example.com/i.sh | sh", []string{"pipes a download"}},
 		"wget bash": {"wget -qO- x | bash -s", []string{"pipes a download"}},

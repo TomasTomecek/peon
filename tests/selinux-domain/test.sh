@@ -36,7 +36,7 @@ run_as_root() {
     systemd-run --quiet \
         --unit="$unit" --description="peon job test" \
         --uid=root --working-directory=/ --service-type=exec \
-        --property=RuntimeMaxSec=60 \
+        --expand-environment=no --property=RuntimeMaxSec=60 \
         --property=SELinuxContext=system_u:system_r:unconfined_service_t:s0 \
         "--property=StandardOutput=append:$out" \
         "--property=StandardError=append:$err" \
@@ -70,6 +70,12 @@ grep -q '^last$' <<< "$out"
 # stderr of a confined program comes through too.
 out="$(run_as_root peon-job-S2.service 'ip link show peonnodev0' 2>&1)" || true
 grep -q 'peonnodev0' <<< "$out"
+
+# Shell variables reach bash unexpanded: systemd-run would otherwise
+# replace "${d}" with the unit's (empty) value before bash runs.
+# shellcheck disable=SC2016 # bash, not this script, expands it
+check vars /srv "$(run_as_root peon-job-S4.service 'd=/srv
+cd "${d}" && pwd')"
 
 # The shell runs in unconfined_service_t, not initrc_t.
 check domain system_u:system_r:unconfined_service_t:s0 "$(run_as_root peon-job-S3.service 'id -Z')"
