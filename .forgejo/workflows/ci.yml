@@ -1,0 +1,31 @@
+# Lint and unit tests for the Go code: the same commands AGENTS.md lists
+# under "Build and test" and tests/unit/test.sh runs on Testing Farm. The
+# tmt tests (smoke, user-manager, selinux-domain) need a real system and
+# stay on Packit. Needs network for dnf (golang, gcc) and for the one Go
+# module (gopkg.in/yaml.v3), which the repo does not vendor.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  go:
+    # CentOS Stream 10 image from tt/plum (forgejo/ci-image), no Go in it.
+    runs-on: cs10
+    steps:
+      - uses: actions/checkout@v4
+      # golang for the toolchain; gcc because -race needs cgo.
+      - name: Install Go and gcc
+        run: |
+          dnf -y -q install --setopt=install_weak_deps=False golang gcc
+          go version
+      - name: Build
+        run: go build ./cmd/peon
+      - name: Vet
+        run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: Unit tests
+        run: go test -count=1 ./...
+      - name: Unit tests with the race detector
+        run: CGO_ENABLED=1 go test -count=1 -race ./...
